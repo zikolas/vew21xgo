@@ -1,0 +1,115 @@
+VEWASIC - CF-VEW211 MEI ASIC (DA65646) software-visible map
+============================================================
+power-up: IF status=7F (READY=1)
+
+[1] attribute space map (256-byte blocks, even addresses):
+  attr 00000: const fill 07
+  attr 00200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 00400: const fill FF
+  attr 01000: const fill 07
+  attr 01200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 01400: const fill FF
+  attr 02000: const fill 07
+  attr 02200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 02400: const fill FF
+  attr 03000: const fill 07
+  attr 03200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 03400: const fill FF
+  attr 04000: const fill 07
+  attr 04200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 04400: const fill FF
+  attr 05000: const fill 07
+  attr 05200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 05400: const fill FF
+  attr 06000: const fill 07
+  attr 06200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 06400: const fill FF
+  attr 07000: const fill 07
+  attr 07200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 07400: const fill FF
+  attr 08000: const fill 07
+  attr 08200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 08400: const fill FF
+  attr 09000: const fill 07
+  attr 09200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 09400: const fill FF
+  attr 0A000: const fill 07
+  attr 0A200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 0A400: const fill FF
+  attr 0B000: const fill 07
+  attr 0B200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 0B400: const fill FF
+  attr 0C000: const fill 07
+  attr 0C200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 0C400: const fill FF
+  attr 0D000: const fill 07
+  attr 0D200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 0D400: const fill FF
+  attr 0E000: const fill 07
+  attr 0E200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 0E400: const fill FF
+  attr 0F000: const fill 07
+  attr 0F200: DATA (sum=FAC5, first=C0 00 00 00)
+  attr 0F400: const fill FF
+
+[2] attribute write-latch extent (even addresses):
+  latches: 000:Y 040:Y 080:Y 0C0:Y 100:Y 140:Y 180:Y 1C0:Y 1FE:Y 210:n 220:n 240:n 280:n 300:n 3FE:n 400:n 500:n 7FE:n 800:n FFE:n
+
+[3] config register file 0x200-0x21E (even bytes, reset state):
+  C0 00 00 00 00 FF FF FF FF FF FF FF FF FF FF FF 
+  COR  @200: reset=C0  bits that latch=EF  codec after=DEAD
+  CCSR @202: reset=00  bits that latch=08  codec after=DEAD
+  +204 @204: reset=00  bits that latch=01  codec after=DEAD
+  +206 @206: reset=00  bits that latch=FE  codec after=DEAD
+  +208 @208: reset=00  bits that latch=0F  codec after=DEAD
+  +20A @20A: reset=FF  bits that latch=FF  codec after=DEAD
+  +20C @20C: reset=FF  bits that latch=FF  codec after=DEAD
+  +20E @20E: reset=FF  bits that latch=FF  codec after=DEAD
+  +210 @210: reset=FF  bits that latch=FF  codec after=DEAD
+
+[4] I/O ports at idx 0x20 (base 0x530):
+  read: 530=00 531=00 532=00 533=00  [codec 534-537: 80 80 80 80]  538=FF 539=FF
+  port 530: reset=00 bits-latch=00 codec=ok
+  port 531: reset=00 bits-latch=00 codec=ok
+  port 532: reset=00 bits-latch=00 codec=ok
+  port 533: reset=00 bits-latch=00 codec=ok
+  port 538: reset=FF bits-latch=FF codec=ok
+  port 539: reset=FF bits-latch=FF codec=ok
+
+[5] COR index walk (codec IAR at expected base; FF = no decode):
+  idx 00 -> base 530: +4=FF +6=FF  COR readback=40
+  idx 01 -> base 530: +4=FF +6=FF  COR readback=41
+  idx 10 -> base 530: +4=FF +6=FF  COR readback=40
+  idx 20 -> base 530: +4=80 +6=80  COR readback=60
+  idx 21 -> base E80: +4=80 +6=80  COR readback=61
+  idx 22 -> base F40: +4=80 +6=80  COR readback=62
+  idx 23 -> base 604: +4=80 +6=80  COR readback=63
+  idx 24 -> base 530: +4=80 +6=80  COR readback=64
+  idx 2F -> base 530: +4=FF +6=FF  COR readback=6F
+  idx 3F -> base 530: +4=FF +6=FF  COR readback=6F
+
+[6] common memory scan (16KB blocks, first 256KB):
+  common 00000: const (first=FF)  write-latch=no
+  common 04000: const (first=FF)  write-latch=no
+  common 08000: const (first=FF)  write-latch=no
+  common 0C000: const (first=FF)  write-latch=no
+  common 10000: const (first=FF)  write-latch=no
+  common 14000: const (first=FF)  write-latch=no
+  common 18000: const (first=FF)  write-latch=no
+  common 1C000: const (first=FF)  write-latch=no
+  common 20000: const (first=FF)  write-latch=no
+  common 24000: const (first=FF)  write-latch=no
+  common 28000: const (first=FF)  write-latch=no
+  common 2C000: const (first=FF)  write-latch=no
+  common 30000: const (first=FF)  write-latch=no
+  common 34000: const (first=FF)  write-latch=no
+  common 38000: const (first=FF)  write-latch=no
+  common 3C000: const (first=FF)  write-latch=no
+
+[7] I/O decode footprint 0x500-0x53F (window widened):
+  500: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+  510: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+  520: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+  530: 00 00 00 00 40 00 CC 00 FF FF FF FF FF FF FF FF
+
+done - run VEW21XGO to re-heal the CIS + restore normal config.
