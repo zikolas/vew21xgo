@@ -1,32 +1,36 @@
 # VEW21XGO — a DOS enabler for the Panasonic CF-VEW211 PCMCIA sound card
 
 A single-command DOS **point enabler** that brings the **Panasonic CF-VEW211**
-PC Card sound card (Matsushita, 1994 — a WSS-style codec + OPL3 FM design) to
-life with no Card Services and no Socket Services. It programs the PCMCIA host
+PC Card sound card (Matsushita, 1994 — CS4231A codec + YMF262 OPL3) to life
+with no Card Services and no Socket Services. It programs the PCMCIA host
 controller and the card directly, then gets out of the way.
 
-Its party trick: **it works even when the card's CIS is dead.** The unit this
-was written for reads a stuck fill byte (`0x07`) across its entire tuple
-region, so no Card Services stack or CIS-matching enabler can ever identify
-it — but the card logic behind the broken CIS is perfectly healthy. VEW21XGO
-carries the card's complete configuration table, taken from a known-good
-CF-VEW211 CIS dump, and never needs to read the on-card CIS at all. An intact
-card is matched by its MANFID (`0x0032/0x0001`); a broken one by its dead-CIS
-signature (a uniform fill wall where tuples should be).
+Its party trick: **it revives a card whose CIS is dead — and makes it
+self-describing again.** The unit this was written for has a failed CIS
+EEPROM: its tuple region reads a stuck fill byte, so no Card Services stack
+or CIS-matching enabler can ever identify it. But the card's ASIC shadows
+the CIS in host-writable RAM — so VEW21XGO carries a byte-exact image from a
+healthy card and, whenever it finds the dead pattern, **injects the full CIS
+back into the shadow**: from that moment (until power-down) the card
+identifies itself normally to *any* software that asks. Intact cards are
+matched by MANFID (`0x0032/0x0001`); dead ones by their uniform-fill
+signature, then healed.
 
 Clean-room: built from a known-good CIS dump, the public Intel 82365SL PCIC
-register set, and the public AD1848/CS4231 codec + OPL FM programming models.
-No vendor driver code. Developed and tested on a ThinkPad 235; it should work
-on Intel 82365-class controllers generally.
+register set, the Crystal CS4231A datasheet, and the public OPL FM
+programming model. No vendor driver code. Developed and tested on an IBM
+PC110; it should work on Intel 82365-class controllers generally.
 
 ## Features
 
 | | Feature |
 |:---:|---|
+| ✅ | **CIS self-healing** — dead-CIS card becomes self-describing every run |
 | ✅ | **OPL3 FM synthesis** at the standard AdLib port `0x388` — games just work |
-| ✅ | **WSS codec** (AD1848/CS4231 family) mapped at `0x530` / `0xE80` / `0xF40` / `0x604` |
-| ✅ | **Dead-CIS rescue** — enables a card whose CIS storage has failed |
-| ✅ | **Mixer un-mute** — the codec powers up silent; VEW21XGO opens DAC + Aux paths |
+| ✅ | **WSS codec** (CS4231A) mapped at `0x530` / `0xE80` / `0xF40` / `0x604` |
+| ✅ | **PCM volume** (`/VOL`) — DAC attenuation in 1.5 dB steps |
+| ✅ | **Host-speaker audio** (`/SPKR`) — card audio on the laptop's own speaker via the PCMCIA #SPKR pin (1-bit, lo-fi by nature) |
+| ✅ | **Mixer un-mute** — the codec powers up silent; VEW21XGO opens the paths |
 | ✅ | **FM beep test** (`/BEEP`) — instant audible proof the card is alive |
 
 ## Usage
@@ -42,13 +46,17 @@ With no `/S`, VEW21XGO scans every socket and configures the first CF-VEW211
 (or dead-CIS card) it finds, tagged `(auto)` in its output.
 
 ```
-VEW21XGO [/IO=530] [/I=0] [/BEEP] [/S=0..7] [/W=D000] [/OFF]
+VEW21XGO [/IO=530] [/I=0] [/VOL=4] [/BEEP] [/SPKR] [/S=0..7] [/W=D000] [/OFF]
   /IO=hex    codec base — one of 530 (default) / E80 / F40 / 604 (picks the
              matching card config index; the codec registers sit at base+4,
              the OPL3 is always at 388)
   /I=dec     IRQ to route to the socket — 7, 9, 10 or 11 only (the card is
              level-mode only; default 0 = none, FM needs no IRQ)
+  /VOL=dec   DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
+             card's output amp) .. 63; default 4 = -6 dB
   /BEEP      play a short FM test note after enabling
+  /SPKR      also route the card's audio to the host's internal speaker
+             (CCSR Audio bit -> #SPKR pin + PCIC speaker route; mono, harsh)
   /S=dec     socket 0..7 (default: auto-scan)
   /W=hex     attribute-window segment used to reach the card's config
              registers (default D000, auto-relocates if in use)
@@ -68,10 +76,20 @@ Config registers (COR + CCSR) live at attribute offset `0x200`. The COR reads
 back with the LevlREQ bit pinned high — the card only does level-mode
 interrupts, hence the `{7, 9, 10, 11}` IRQ set from its CIS.
 
-WSS **digital** audio wants ISA DMA, which PCMCIA sockets don't have — so as
-with other PC Card sound devices of the era, FM + mixer is the practical DOS
-feature set. The codec itself responds fully (ID `0x8A`) if a PIO-mode driver
-wants to try.
+**Digital audio works — without DMA.** The CS4231A accepts PIO sample
+transfer, and `probes/VEWPLAY.C` is a working PIT-paced `.WAV` player
+(see `probes/README.md` for the two protocol gotchas that make it work).
+**FM has no hardware volume control** — the OPL3's audio (YMF262 → YAC512
+DAC) is summed after the codec, and an exhaustive register hunt found
+nothing that attenuates it (`doc/ASIC.md`).
+
+## Documentation
+
+* `doc/ASIC.md` — full software-visible map of the card's MEI DA65646 ASIC
+  (address decode, CIS shadow behaviour, config registers including three
+  undeclared vendor registers, COR index decode quirks, audio architecture),
+  plus the raw probe output and a PDF rendering.
+* `probes/` — the diagnostic programs that established all of the above.
 
 ## Build
 

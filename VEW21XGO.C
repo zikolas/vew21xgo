@@ -21,6 +21,13 @@
  *   IRQ, when routed, must be one of {7, 9, 10, 11} (card is level-mode
  *   only - its COR reads back with the LevlREQ bit pinned high).
  *
+ * CIS SELF-HEALING (v1.3): the ASIC shadows the CIS in on-card RAM, loaded
+ * from a 93LC56 EEPROM at power-up - and on this unit that load fails (the
+ * 0x07 wall). The shadow is host-writable, so when VEW21XGO finds the dead
+ * pattern it injects the full known-good 256-byte CIS image: the card then
+ * identifies itself normally (MANFID, VERS_1) to ANY software that looks,
+ * until the next power-down. The enabler re-heals it on every run.
+ *
  * Layout at codec base B: WSS-style, AD1848/CS4231-family codec at
  * B+4..B+7 (IAR/IDR/status/PIO). The codec powers up muted, so VEW21XGO
  * un-mutes the DAC and Aux1/Aux2 inputs (the FM synth reaches the output
@@ -28,10 +35,15 @@
  *
  * Build (Open Watcom, 16-bit real mode):  C:\WATCOM\BLD VEW21XGO
  *
- * Usage: VEW21XGO [/IO=530] [/I=0] [/BEEP] [/S=0..7] [/W=D000] [/OFF]
+ * Usage: VEW21XGO [/IO=530] [/I=0] [/VOL=4] [/BEEP] [/SPKR] [/S=0..7]
+ *                 [/W=D000] [/OFF]
  *   /IO=hex    codec base: 530 (default) / E80 / F40 / 604
  *   /I=dec     IRQ to route: 7, 9, 10 or 11 (default 0 = none)
+ *   /VOL=dec   DAC attenuation, 1.5dB per step, 0 (full, clips the card's
+ *              output amp) .. 63; default 4 = -6dB = half amplitude
  *   /BEEP      play a short FM test note after enabling
+ *   /SPKR      also route the card's audio to the host's internal speaker
+ *              (CCSR Audio bit -> PCMCIA #SPKR pin + PCIC speaker route; mono)
  *   /S=dec     socket 0..7 (default: auto-scan)
  *   /W=hex     attribute-window segment for the COR (default D000)
  *   /OFF       power the card's socket down and exit
@@ -41,7 +53,7 @@
 #include <stdlib.h>
 #include <i86.h>
 
-#define VEW21XGO_VER "1.0"
+#define VEW21XGO_VER "1.3"
 #define PCIC_BASE 0x3E0
 #define MAX_SOCKET 7
 
@@ -49,6 +61,27 @@
 #define VEW_CARD 0x0001
 #define VEW_COR  0x0200         /* config registers base (attribute space) */
 #define FM_BASE  0x388          /* OPL3 FM, present in every configuration */
+
+/* Known-good CF-VEW211 CIS (256 bytes), from a healthy unit's DTPL dump.
+ * Injected into the card's CIS shadow RAM when the on-card copy is dead. */
+static const unsigned char cis_img[256] = {
+    0x01,0x02,0x00,0xFF,0x17,0x02,0xD1,0xFF,0x15,0x64,0x04,0x01,0x4D,0x61,0x74,0x73,
+    0x75,0x73,0x68,0x69,0x74,0x61,0x20,0x45,0x6C,0x65,0x63,0x74,0x72,0x69,0x63,0x20,
+    0x49,0x6E,0x64,0x75,0x73,0x74,0x72,0x69,0x61,0x6C,0x20,0x43,0x6F,0x2E,0x2C,0x20,
+    0x4C,0x74,0x64,0x2E,0x00,0x50,0x61,0x6E,0x61,0x73,0x6F,0x6E,0x69,0x63,0x20,0x53,
+    0x6F,0x75,0x6E,0x64,0x20,0x43,0x61,0x72,0x64,0x00,0x43,0x46,0x2D,0x56,0x45,0x57,
+    0x32,0x31,0x31,0x00,0x56,0x65,0x72,0x73,0x69,0x6F,0x6E,0x20,0x31,0x2E,0x31,0x20,
+    0x41,0x70,0x6C,0x2E,0x20,0x32,0x35,0x2C,0x31,0x39,0x39,0x34,0x00,0xFF,0x1A,0x05,
+    0x01,0x23,0x00,0x02,0x03,0x1B,0x14,0xE0,0x81,0x9D,0x11,0x55,0x1E,0xFC,0x23,0xAC,
+    0x61,0x30,0x05,0x09,0x88,0x03,0x03,0x30,0x80,0x0E,0x08,0x1B,0x0A,0x21,0x08,0xAC,
+    0x61,0x80,0x0E,0x09,0x88,0x03,0x03,0x1B,0x0A,0x22,0x08,0xAC,0x61,0x40,0x0F,0x09,
+    0x88,0x03,0x03,0x1B,0x0A,0x23,0x08,0xAC,0x61,0x04,0x06,0x09,0x88,0x03,0x03,0x20,
+    0x04,0x32,0x00,0x01,0x00,0x21,0x02,0xFF,0x00,0x10,0x05,0x47,0xFF,0xB9,0x00,0xC9,
+    0x14,0x00,0xFF,0xC3,0x50,0x72,0x6F,0x64,0x75,0x63,0x74,0x69,0x6F,0x6E,0x20,0x44,
+    0x61,0x74,0x65,0x3A,0xCB,0x07,0x02,0x0D,0x01,0x54,0x69,0x6D,0x65,0x3A,0x14,0x20,
+    0x30,0x2B,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
 
 static unsigned pcic_idx = PCIC_BASE;
 static unsigned sockoff  = 0;
@@ -235,8 +268,9 @@ static int sw(const char *a, const char *name, char **val)
 
 int main(int argc, char **argv)
 {
-    unsigned base = 0x530, irq = 0, sock = 0, memseg = 0xD000;
-    int off = 0, sgiven = 0, wgiven = 0, beep = 0, found = 0, any = 0, i;
+    unsigned base = 0x530, irq = 0, sock = 0, memseg = 0xD000, vol = 4;
+    int off = 0, sgiven = 0, wgiven = 0, beep = 0, spkr = 0, found = 0, any = 0, i;
+    int cis_fixed = 0;
     unsigned char coridx, corrb, cver;
     int codec_ok, oplv;
     unsigned char __far *cor;
@@ -246,6 +280,8 @@ int main(int argc, char **argv)
         if (a[0] != '/' && a[0] != '-') continue;
         if      (sw(a, "OFF",  &vp)) off = 1;
         else if (sw(a, "BEEP", &vp)) beep = 1;
+        else if (sw(a, "SPKR", &vp)) spkr = 1;
+        else if (sw(a, "VOL",  &vp)) { if (vp) { vol = (unsigned)strtol(vp, 0, 10); if (vol > 63) vol = 63; } }
         else if (sw(a, "IO",   &vp)) { if (vp) base = (unsigned)strtol(vp, 0, 16); }
         else if (sw(a, "I",    &vp)) { if (vp) irq = (unsigned)strtol(vp, 0, 10); }
         else if (sw(a, "S",    &vp)) { if (vp) { sock = (unsigned)strtol(vp, 0, 10); sgiven = 1; } }
@@ -303,11 +339,26 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    /* Dead CIS: the shadow RAM is writable, so heal it with the known-good
+     * image (even attribute addresses carry the data), then re-parse. The
+     * card now identifies itself to any CIS-reading software until the
+     * socket next loses power. */
+    if (g_cisdead) {
+        unsigned char __far *a = (unsigned char __far *)MK_FP(memseg, 0);
+        unsigned k;
+        for (k = 0; k < 256; k++) a[k * 2] = cis_img[k];
+        read_cis(memseg);
+        cis_fixed = (!g_cisdead && g_manf == VEW_MANF && g_card == VEW_CARD);
+    }
+
     /* COR (attribute window probe_socket left mapped). The card pins the
      * LevlREQ bit (0x40) on readback, so verify the index bits only. */
     cor = (unsigned char __far *)MK_FP(memseg, VEW_COR);
     *cor = coridx; MS(5);
     corrb = *cor;
+    /* CCSR (COR+2): the Audio bit gates the card's mixer output onto the
+     * PCMCIA #SPKR pin; the host side of that route is set below */
+    *(cor + 2) = (unsigned char)(spkr ? 0x08 : 0x00);
 
     /* I/O window 0 = codec base..base+9 (8-bit), window 1 = OPL 0x388..0x38B */
     wr(0x08, base & 0xFF);        wr(0x09, (base >> 8) & 0xFF);
@@ -317,6 +368,9 @@ int main(int argc, char **argv)
     wr(0x07, 0x00);                                     /* both windows 8-bit */
     wr(0x03, irq ? (0x60 | 0x10 | (irq & 0x0F)) : 0x60);/* I/O mode (+IRQ) */
     wr(0x06, 0xC0);                                     /* enable I/O win0+win1; mem win off */
+    /* host-side #SPKR route: Cirrus-style Misc Control 1 bit 4 (verified to
+     * latch on the '235's bridge); a read-back no-op where unimplemented */
+    wr(0x16, spkr ? (rd(0x16) | 0x10) : (rd(0x16) & 0xEF));
 
     /* A cold-booted card was only just powered, so the codec is still running
      * its power-on calibration and reads 0x80 (busy). Wait it out before
@@ -326,7 +380,7 @@ int main(int argc, char **argv)
 
     /* un-mute: the codec powers up muted, and the FM synth reaches the output
      * through an Aux mix input - so open DAC + Aux1 + Aux2 at 0dB */
-    ccput(0x06, 0x00); ccput(0x07, 0x00);               /* L/R DAC out: unmute 0dB */
+    ccput(0x06, (unsigned char)vol); ccput(0x07, (unsigned char)vol); /* L/R DAC out: unmute, -1.5dB*vol */
     ccput(0x02, 0x08); ccput(0x03, 0x08);               /* L/R Aux1: unmute 0dB */
     ccput(0x04, 0x08); ccput(0x05, 0x08);               /* L/R Aux2: unmute 0dB */
 
@@ -338,8 +392,10 @@ int main(int argc, char **argv)
     if (beep && oplv) fm_beep();
 
     printf("VEW21XGO %s - Panasonic CF-VEW211: socket %u%s\n", VEW21XGO_VER, sock, sgiven ? "" : " (auto)");
-    if (g_cisdead)
-        printf("   CIS: DEAD (stuck %02X fill) - using built-in config table\n", g_cisfill);
+    if (cis_fixed)
+        printf("   CIS: was DEAD - injected known-good image; card now self-describing\n   CIS \"%s\"  MANFID %04X/%04X\n", g_vers, g_manf, g_card);
+    else if (g_cisdead)
+        printf("   CIS: DEAD (stuck %02X fill) - injection failed, using built-in config\n", g_cisfill);
     else
         printf("   CIS \"%s\"  MANFID %04X/%04X\n", g_vers, g_manf, g_card);
     printf("   COR @%03X idx %02X (readback %02X, %s)\n",
@@ -349,7 +405,8 @@ int main(int argc, char **argv)
            oplv == 3 ? "OPL3" : (oplv == 2 ? "OPL2" : "NOT detected"), FM_BASE);
     if (irq) printf("   IRQ %u (level-mode card)\n", irq);
     else     printf("   no IRQ routed (/I=7|9|10|11 to route one)\n");
-    printf("   mixer un-muted (DAC + Aux1/Aux2 at 0dB)\n");
+    printf("   mixer un-muted (DAC -%u.%udB, Aux1/Aux2 0dB)\n", vol * 15 / 10, (vol * 15) % 10);
+    if (spkr) printf("   #SPKR audio ON - card mixer routed to host speaker\n");
     if (beep && oplv) printf("   FM test note sent\n");
     return 0;
 }
