@@ -43,6 +43,36 @@ to use `VEW21XGO.EXE`. Each builds the same way: `C:\WATCOM\BLD <name>`.
   strobe — a pulse commits all 256 bytes, no writes needed while set).
   This is the register behind `VEWCIS /BURN`.
 
+- **VEWFM.C** — FM-volume hunt round 3: automated 0x208×0x206 matrix +
+  write-only-port ramps, millisecond-paced verified writes, all codec
+  inputs opened so a routing switch would be audible. Verdict: no effect.
+
+- **VEWXCTL.C** — round 4 (and the cross-product playground): the CS4231A's
+  XCTL0/XCTL1 external-control pins (I10) in all states, live alongside
+  the vendor registers and codec inputs in one TUI. Verdict: no effect —
+  which, combined with the vendor driver's own super-loud FM, finally
+  settles it: **the card has no hardware FM volume control**.
+
+- **VEWDUMP.C** — one-shot register state snapshot (PCIC, attribute/config
+  regs, I/O ports, full codec I0–I31) for diffing configurations. Diffing
+  our enabler against the period vendor driver (`../doc/DUMP-OUR.TXT` vs
+  `DUMP-VND.TXT`) revealed the vendor values in 0x206/0x208 — and the
+  hidden register bank they unlock.
+
+- **VEWHID.C** — interactive explorer for that hidden bank: base+8/+9
+  decode only while [206]=0x38 AND [208]=0x05 (a two-register combination
+  lock). +8 = three latching bits under a fixed ID nibble; +9 = constant
+  0xBC so far. Audible function: none found; purpose unknown.
+
 - **CIS_GOOD.BIN** — byte-exact 256-byte CIS image from a healthy CF-VEW211
   (also embedded in VEW21XGO for the shadow self-heal; suitable for
   programming a replacement 93LC56 directly).
+
+- **CIS_TEST.BIN** — the "Hello from Claude 2026!" marker variant (VERS_1
+  string replaced in-place, CISTPL_CHECKSUM corrected) used to independently
+  verify the EEPROM write path end-to-end. `VEWCIS /RESTORE` undoes it.
+
+- **CIS_PC98_J04.BIN** — reference CIS dumped (read-only) from the NEC
+  PC-9801N-J04, the PC-98 sibling of this card: same ASIC + codec, no FM
+  synth fitted, single config entry at 0xF40 with PC-98 IRQ numbering,
+  and no MANFID tuple at all.
