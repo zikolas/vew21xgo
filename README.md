@@ -61,7 +61,9 @@ VEW21XGO [/IO=530] [/I=0] [/VOL=4] [/BEEP] [/SPKR] [/S=0..7] [/W=D000] [/OFF]
   /I=dec     IRQ to route to the socket — 7, 9, 10 or 11 only (the card is
              level-mode only; default 0 = none, FM needs no IRQ)
   /VOL=dec   DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
-             card's output amp) .. 63; default 4 = -6 dB
+             card's output amp) .. 63; default 24 = -36 dB, a comfortable
+             headphone level established by ear (line-out users into
+             amplified speakers may prefer /VOL=8 or so)
   /BEEP      play a short FM test note after enabling
   /SPKR      also route the card's audio to the host's internal speaker
              (CCSR Audio bit -> #SPKR pin + PCIC speaker route; mono, harsh)
@@ -85,6 +87,9 @@ VEWCIS /BURN      PERMANENT repair: power-cycles to read the true EEPROM
                   (attr 0x204 bit0), then power-cycles again and verifies
                   the EEPROM reloads the pristine CIS on its own.
                   Refuses to burn a card that is already healthy.
+VEWCIS /RESTORE   like /BURN but unconditional: burns the reference image
+                  even over a valid CIS (undo test images / factory-reset
+                  to the known-good dump)
 ```
 
 ## The card

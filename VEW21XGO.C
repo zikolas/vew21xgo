@@ -39,8 +39,9 @@
  *                 [/W=D000] [/OFF]
  *   /IO=hex    codec base: 530 (default) / E80 / F40 / 604
  *   /I=dec     IRQ to route: 7, 9, 10 or 11 (default 0 = none)
- *   /VOL=dec   DAC attenuation, 1.5dB per step, 0 (full, clips the card's
- *              output amp) .. 63; default 4 = -6dB = half amplitude
+ *   /VOL=dec   DAC (PCM) attenuation, 1.5dB per step, 0 (full, clips the
+ *              card's output amp) .. 63; default 24 = -36dB (a comfortable
+ *              listening level established by ear on real hardware)
  *   /BEEP      play a short FM test note after enabling
  *   /SPKR      also route the card's audio to the host's internal speaker
  *              (CCSR Audio bit -> PCMCIA #SPKR pin + PCIC speaker route; mono)
@@ -53,7 +54,7 @@
 #include <stdlib.h>
 #include <i86.h>
 
-#define VEW21XGO_VER "1.3"
+#define VEW21XGO_VER "1.4"
 #define PCIC_BASE 0x3E0
 #define MAX_SOCKET 7
 
@@ -268,7 +269,7 @@ static int sw(const char *a, const char *name, char **val)
 
 int main(int argc, char **argv)
 {
-    unsigned base = 0x530, irq = 0, sock = 0, memseg = 0xD000, vol = 4;
+    unsigned base = 0x530, irq = 0, sock = 0, memseg = 0xD000, vol = 24;
     int off = 0, sgiven = 0, wgiven = 0, beep = 0, spkr = 0, found = 0, any = 0, i;
     int cis_fixed = 0;
     unsigned char coridx, corrb, cver;
@@ -381,11 +382,14 @@ int main(int argc, char **argv)
     /* un-mute: the codec powers up muted, and the FM synth reaches the output
      * through an Aux mix input - so open DAC + Aux1 + Aux2 at 0dB */
     ccput(0x06, (unsigned char)vol); ccput(0x07, (unsigned char)vol); /* L/R DAC out: unmute, -1.5dB*vol */
-    ccput(0x02, 0x08); ccput(0x03, 0x08);               /* L/R Aux1: unmute 0dB */
-    ccput(0x04, 0x08); ccput(0x05, 0x08);               /* L/R Aux2: unmute 0dB */
+    /* Aux1/Aux2 stay MUTED: the FM synth does NOT route through the codec
+     * on this card (proven by exhaustive mixer tests) - these inputs only
+     * pass stray analog (Aux2 audibly bleeds), so open them = noise. */
+    ccput(0x02, 0x88); ccput(0x03, 0x88);               /* L/R Aux1: muted */
+    ccput(0x04, 0x88); ccput(0x05, 0x88);               /* L/R Aux2: muted */
 
     /* verify the codec responds by reading back a mixer reg we just wrote */
-    codec_ok = ((ccget(0x02) & 0x1F) == 0x08);
+    codec_ok = ((ccget(0x02) & 0x9F) == 0x88);
     cver = ccget(0x0C);                                 /* I12: chip ID (this unit: 0x8A) */
 
     oplv = opl_detect();
@@ -405,7 +409,7 @@ int main(int argc, char **argv)
            oplv == 3 ? "OPL3" : (oplv == 2 ? "OPL2" : "NOT detected"), FM_BASE);
     if (irq) printf("   IRQ %u (level-mode card)\n", irq);
     else     printf("   no IRQ routed (/I=7|9|10|11 to route one)\n");
-    printf("   mixer un-muted (DAC -%u.%udB, Aux1/Aux2 0dB)\n", vol * 15 / 10, (vol * 15) % 10);
+    printf("   mixer: DAC (PCM) -%u.%udB, Aux1/Aux2 muted\n", vol * 15 / 10, (vol * 15) % 10);
     if (spkr) printf("   #SPKR audio ON - card mixer routed to host speaker\n");
     if (beep && oplv) printf("   FM test note sent\n");
     return 0;
