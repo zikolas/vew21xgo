@@ -101,15 +101,39 @@ int main(int argc, char **argv)
 
     /* codec: format under MCE, PPIO under MCE, then count + PEN */
     i8 = (unsigned char)(rcode | (chans == 2 ? 0x10 : 0x00) | (bits == 16 ? 0x40 : 0x00));
-    ci_wait();
-    outp(IAR, 0x48); iod(200); outp(IDR, i8);   iod(200);   /* MCE | I8 */
-    outp(IAR, 0x49); iod(200); outp(IDR, 0x40); iod(200);   /* MCE | I9 = PPIO */
-    outp(IAR, 0x00); iod(200);                              /* MCE off */
-    ci_wait(); MS(10);
+    /* Program format + PIO mode under MCE - PACED IN MILLISECONDS and
+     * VERIFIED WITH RETRY. The CF-VEW211's CS4231A-KQ silently drops parts
+     * of a microsecond-paced MCE sequence issued from a cold codec (the
+     * same bytes land fine when written slowly): the cause of the great
+     * silent-22kHz mystery. The identical sequence by hand over a slow
+     * link always works, so: slow down, read back, retry until it took. */
+    {
+        int tries;
+        for (tries = 0; tries < 8; tries++) {
+            ci_wait();
+            outp(IAR, 0x48); MS(2); outp(IDR, i8);   MS(2);  /* MCE | I8 */
+            outp(IAR, 0x49); MS(2); outp(IDR, 0x48); MS(2);  /* MCE | I9 = PPIO|ACAL */
+            outp(IAR, 0x00); MS(2);                          /* MCE off -> autocalibrate */
+            ci_wait(); MS(10);
+            /* wait out autocalibration (I11 bit5 = ACI) */
+            { unsigned long w; for (w = 0; w < 400000UL; w++) if (!(ci_get(0x0B) & 0x20)) break; }
+            if (ci_get(0x08) == i8 && (ci_get(0x09) & 0x48) == 0x48) break;
+        }
+        if (tries) printf("(format writes needed %d retr%s)\n", tries, tries == 1 ? "y" : "ies");
+        if (tries == 8) printf("WARNING: format/PIO setup never verified - expect silence.\n");
+    }
     ci_put(0x06, (unsigned char)(ci_get(0x06) & 0x3F));     /* un-mute L/R DAC but */
     ci_put(0x07, (unsigned char)(ci_get(0x07) & 0x3F));     /* keep the enabler's level */
     ci_put(0x0F, 0xFE); ci_put(0x0E, 0xFF);                 /* count base */
-    ci_put(0x09, 0x41);                                     /* PEN (PPIO retained) */
+    /* PEN on-the-fly (PPIO+ACAL retained) - also verified with retry */
+    {
+        int tries;
+        for (tries = 0; tries < 8; tries++) {
+            ci_put(0x09, 0x49); MS(2);
+            if (ci_get(0x09) & 0x01) break;
+        }
+        if (tries == 8) printf("WARNING: PEN never latched - playback disabled.\n");
+    }
 
     /* Calibrate observed PIT rate against one BIOS tick: channel 0 in mode 3
      * (the PC default) decrements TWICE per 1.193182 MHz clock, mode 2 once.
