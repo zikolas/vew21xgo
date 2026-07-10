@@ -19,9 +19,12 @@
  * strobe, then power-cycles again and verifies the EEPROM reloads the
  * pristine image by itself.
  *
- * Usage: VEWCIS [/BURN] [/S=0..7] [/W=D000]
- *   /BURN   permanently program the repaired CIS into the card's EEPROM
- *           (verified across a power cycle; skips if EEPROM already healthy)
+ * Usage: VEWCIS [/BURN | /RESTORE] [/S=0..7] [/W=D000]
+ *   /BURN     permanently program the repaired CIS into the card's EEPROM
+ *             (verified across a power cycle; skips if EEPROM already healthy)
+ *   /RESTORE  like /BURN but unconditional: burns the reference image even
+ *             over a VALID CIS (for undoing test images / factory-resetting
+ *             to the known-good dump)
  *   /S=dec  socket 0..7 (default: auto-scan)
  *   /W=hex  attribute-window segment (default D000, auto-relocates if busy)
  *
@@ -32,7 +35,7 @@
 #include <stdlib.h>
 #include <i86.h>
 
-#define VEWCIS_VER "1.1"
+#define VEWCIS_VER "1.2"
 #define PCIC_BASE 0x3E0
 #define MAX_SOCKET 7
 #define VEW_MANF 0x0032
@@ -224,13 +227,14 @@ static int sw(const char *a, const char *name, char **val)
 int main(int argc, char **argv)
 {
     unsigned sock = 0, memseg = 0xD000;
-    int sgiven = 0, wgiven = 0, burn = 0, found = 0, any = 0, i;
+    int sgiven = 0, wgiven = 0, burn = 0, restore = 0, found = 0, any = 0, i;
     unsigned char fill;
 
     for (i = 1; i < argc; i++) {
         char *arg = argv[i], *vp;
         if (arg[0] != '/' && arg[0] != '-') continue;
         if      (sw(arg, "BURN", &vp)) burn = 1;
+        else if (sw(arg, "RESTORE", &vp)) { burn = 1; restore = 1; }
         else if (sw(arg, "S", &vp)) { if (vp) { sock = (unsigned)strtol(vp, 0, 10); sgiven = 1; } }
         else if (sw(arg, "W", &vp)) { if (vp) { memseg = (unsigned)strtol(vp, 0, 16); wgiven = 1; } }
         else printf("Ignoring unknown switch: %s\n", arg);
@@ -271,15 +275,17 @@ int main(int argc, char **argv)
         printf("   /BURN: power-cycling to read the true EEPROM state...\n");
         if (!power_cycle(memseg)) { printf("   power cycle failed\n"); return 1; }
         read_cis(memseg);
-        if (!g_cisdead && g_manf == VEW_MANF && g_card == VEW_CARD) {
+        if (!restore && !g_cisdead && g_manf == VEW_MANF && g_card == VEW_CARD) {
             printf("   EEPROM already healthy (\"%s\") - nothing to burn.\n", g_vers);
             wr(0x06, rd(0x06) & ~0x01);
             return 0;
         }
         fill = g_cisfill;
+        if (!g_cisdead && restore)
+            printf("   /RESTORE: current CIS is valid (\"%s\") - overwriting with reference.\n", g_vers);
         if (!inject(memseg)) { printf("   shadow injection FAILED - aborting.\n"); return 4; }
-        printf("   shadow healed (was %s%02X) - pulsing commit strobe (attr 204.0)...\n",
-               g_cisdead ? "dead fill " : "corrupt, first byte ", fill);
+        printf("   shadow %s - pulsing commit strobe (attr 204.0)...\n",
+               g_cisdead ? "healed" : "loaded with reference image");
         strobe(memseg);
         if (!power_cycle(memseg)) { printf("   power cycle failed\n"); return 1; }
         read_cis(memseg);
