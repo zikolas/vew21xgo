@@ -40,7 +40,7 @@ Power-on state: `C0 00 00 00 00` then `FF...` from 0x20A.
 |---|---|---|---|---|
 | 0x200 | COR | **0xC0** | `0xEF` (bit4 never latches) | Powers up in SRESET (bit7) + LevlREQ (bit6). Bit6 reads back 1 **always** (hardwired level-mode). Index in bits 5–0. |
 | 0x202 | CCSR | 0x00 | `0x08` only | **Only the Audio bit exists.** IntrAck/Intr/PwrDwn/etc. unimplemented. Audio bit gates mixer audio onto #SPKR (confirmed audibly). |
-| 0x204 | vendor | 0x00 | `0x01` (1 bit) | **Undeclared in CIS.** Function unknown. |
+| 0x204 | vendor | 0x00 | `0x01` (1 bit) | **EEPROM COMMIT STROBE** (isolated by probes/VEWSTRB.C, 2026-07-10): pulsing bit0 writes the **entire 256-byte CIS shadow** back to the 93LC56. Pure strobe — no shadow writes needed while set; verified across power cycles. Panasonic's factory programming hook, and the mechanism behind the accidental repair. Used by `VEWCIS /BURN`. |
 | 0x206 | vendor | 0x00 | `0xFE` (7 bits!) | **Undeclared.** Seven writable bits — prime candidate for an FM attenuator / volume DAC or control latch. |
 | 0x208 | vendor | 0x00 | `0x0F` (4 bits) | **Undeclared.** Function unknown. |
 
@@ -93,12 +93,43 @@ control.** To be confirmed against the period Windows driver on a good-CIS
 card (pending — if its "FM" slider works, watch what it writes; if it maps
 to codec Aux1, it never worked on this card's topology either).
 
+## The accidental EEPROM repair (2026-07-10)
+
+After the VEWVND bit sweeps, the card began **loading a valid CIS from the
+EEPROM on every cold power-up** — verified byte-for-byte against the good
+image across multiple power cycles including a 45-second unpowered dwell.
+Every power-up before the sweeps (dozens, over two days) produced the 0x07
+dead fill.
+
+Conclusion: **an EEPROM write path exists**, and one of the undocumented
+controls swept by VEWVND v1/v2 (vendor registers 0x204 / 0x206 / 0x208, or
+the write-only ports base+0..+3) acts as a *commit-shadow-to-EEPROM* strobe
+— presumably Panasonic's factory programming hook. The sweep happened while
+the known-good CIS was resident in the shadow, so the good image was burned
+in: the card is now permanently repaired.
+
+**RESOLVED (2026-07-10): the strobe is attribute 0x204 bit0.** Isolated by
+`probes/VEWSTRB.C` — a tracer-byte search that kept the good CIS resident
+in the shadow at all times, so any accidental commit only re-burned a good
+image. First candidate hit; semantics refined to a **pure whole-shadow
+commit on pulse** (tracer planted *before* the pulse, no writes while set,
+still committed). Pristine image restored and verified across multiple
+cold power cycles afterwards.
+
+The repair recipe is therefore: *fill shadow → pulse 0x204 bit0 → wait ~3 s
+→ power-cycle to verify* — implemented as **`VEWCIS /BURN`**, a complete
+software-only permanent CIS repair for this card family (with a safety
+rail: it power-cycles first and refuses to burn a card whose EEPROM already
+loads a valid CF-VEW211 CIS). The standing warning remains: **never pulse
+0x204.0 while the shadow holds garbage.**
+
 ## Open questions
 
-1. What vendor bits 0x204.0, 0x206.7–1, 0x208.3–0 actually do (they latch
-   but audibly do nothing). Still candidates for an EEPROM write-enable —
-   persistence pass (set bit → write shadow → power cycle) not yet done.
-2. Same for the write-only I/O ports base+0..+3.
+1. ~~Which control is the EEPROM commit strobe~~ — **answered: 0x204 bit0**
+   (see above).
+2. What the remaining bits do: 0x206 (7 bits) and 0x208 (4 bits) latch but
+   have no audible effect in isolation — the FM routing/volume cross-product
+   test (VEWVND v3 plan) is the next step.
 3. Why the CIS declares 10 I/O bytes but the card decodes 8.
 4. Whether any register drives the TC4W66F analog switch, or whether it's
    hard-wired (e.g. to the CCSR audio bit / #SPKR path).
