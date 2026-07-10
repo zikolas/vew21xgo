@@ -123,13 +123,64 @@ rail: it power-cycles first and refuses to burn a card whose EEPROM already
 loads a valid CF-VEW211 CIS). The standing warning remains: **never pulse
 0x204.0 while the shadow holds garbage.**
 
+## The combination-locked hidden register bank (2026-07-11)
+
+The vendor DOS driver's register state (`DUMP-VND.TXT` vs our `DUMP-OUR.TXT`)
+revealed that Panasonic's software programs the "function unknown" vendor
+registers — and that under its configuration, the missing I/O bytes at
+base+8/+9 decode (the CIS's 10-byte range is real after all).
+
+Reproduced and bisected on a clean boot: **base+8/+9 decode if and only if
+[206] = 0x38 AND [208] = 0x05 simultaneously** — a two-register combination
+lock; clearing either re-locks the pair to 0xFF. (16-bit I/O window settings
+are irrelevant.) This is why every single-register sweep missed it: the
+unlock itself is silent, and the combination only existed for an instant
+during the matrix sweep with nobody reading the ports.
+
+Unlocked bank contents so far:
+
+* **base+8**: upper nibble reads a fixed 0xA (ID/signature); low nibble has
+  **three latching control bits (0, 2, 3)**; bit 1 accepts writes but never
+  reads back (write-only or strobe).
+* **base+9**: reads a constant 0xBC; deaf to writes so far.
+* Audible effect of every +8 bit and value, FM note held (VEWHID
+  interactive test): **none found**. Function unknown — candidates: factory
+  test hooks, power management, or controls for paths we haven't exercised.
+* The vendor driver also runs with CCSR audio ON (inside speaker), IRQ 9,
+  16-bit I/O windows, DAC muted-until-playback, Aux/LINE muted (matching
+  our v1.4 policy) — see the two dump files in this directory.
+
+**Warning for future probing: never run register experiments with Card
+Services resident** — SS/CS polls the PCIC via the shared index/data pair
+and races every access (this produced phantom results — unlatchable
+registers, impossible status reads — that cost a full evening). `MEM /C`
+first, always.
+
+## The CS4231A-KQ write-timing quirk (2026-07-10)
+
+This card's codec **silently drops microsecond-paced MCE format sequences
+issued from a cold codec** — the same bytes land fine written slowly. This
+single quirk masqueraded for days as: cold-boot silence at 22 kHz, an
+"8 kHz kickstart" ritual, level-independent distortion ("uncalibrated DAC"
+sound), a thermal/dying-crystal theory (retracted — XTAL2 is fine), and a
+suspected voltage event (retracted). Fix (VEWPLAY v5): pace MCE sequences
+in milliseconds and **verify every register write with read-back + retry**.
+The NEC J04 sibling's codec batch tolerates fast writes — pure silicon
+lottery. Rule for all CS4231 code on these cards: never trust a write you
+didn't read back.
+
 ## Open questions
 
-1. ~~Which control is the EEPROM commit strobe~~ — **answered: 0x204 bit0**
-   (see above).
-2. What the remaining bits do: 0x206 (7 bits) and 0x208 (4 bits) latch but
-   have no audible effect in isolation — the FM routing/volume cross-product
-   test (VEWVND v3 plan) is the next step.
+1. ~~Which control is the EEPROM commit strobe~~ — **answered: 0x204 bit0**.
+2. ~~What 0x206/0x208 do~~ — **answered in part: together they are the
+   combination lock for the hidden base+8/+9 bank** (0x38/0x05). Whether
+   other values have additional meaning: unknown.
+3. What the hidden bank's three latching bits + write-only bit actually
+   control (not FM level; not audibly anything yet).
+4. FM volume: **no hardware control exists** — exhaustively confirmed
+   (codec incl. XCTL pins, all vendor registers incl. the hidden bank,
+   all ports, both by sweep and by the vendor driver's own super-loud FM).
+   Windows-era volume was driver-side TL scaling.
 3. Why the CIS declares 10 I/O bytes but the card decodes 8.
 4. Whether any register drives the TC4W66F analog switch, or whether it's
    hard-wired (e.g. to the CCSR audio bit / #SPKR path).

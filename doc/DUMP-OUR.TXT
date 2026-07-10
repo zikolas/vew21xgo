@@ -1,0 +1,9 @@
+VEWDUMP - CF-VEW211 register snapshot (codec base 530)
+PCIC: IFstat=7F pwr=95 intctl=60 winEn=C0 ioctl=00 misc16=00
+PCIC io win0 0530-0539  win1 0388-038B
+attr: COR=60 CCSR=00 [204]=00 [206]=00 [208]=00 [20A]=FF
+io: +0..+3 = 00 00 00 00   +8/+9 = FF FF   OPL stat = 00
+codec IAR=0C  I12=8A (MODE2 was off - peeking)
+codec I0-I15 : 00 00 88 88 88 88 18 18 00 08 00 00 8A 00 00 00 
+codec I16-I31: 00 00 88 88 00 00 00 00 00 A0 A0 00 00 00 00 00 
+done (read-only; MODE2 restored as found).
