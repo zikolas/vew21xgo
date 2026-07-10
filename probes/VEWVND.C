@@ -8,6 +8,13 @@
  *   I/O 0x530..0x533 - read 0x00, nothing read-latches: possibly write-only
  *                      control ports (columns show live read + last write)
  *
+ * *** WARNING (discovered 2026-07-10): one of the bits this tool sweeps is
+ * almost certainly the ASIC's "commit CIS shadow to EEPROM" strobe - a v2
+ * sweep performed while the known-good CIS was in the shadow PERMANENTLY
+ * REPAIRED the dead EEPROM (valid CIS now loads on every cold power-up).
+ * Do NOT sweep these registers while the shadow holds garbage: the same
+ * mechanism can burn garbage just as easily. Heal the shadow first. ***
+ *
  * v1 finding (listening test, 2026-07-09): sweeping 204/206/208 has NO audible effect
  * on the FM note or PCM - they are not the FM volume. The I/O ports are the
  * remaining candidates, hence v2.

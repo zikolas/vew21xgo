@@ -30,8 +30,18 @@ to use `VEW21XGO.EXE`. Each builds the same way: `C:\WATCOM\BLD <name>`.
 
 - **VEWVND.C** — interactive explorer for the unknowns VEWASIC found: vendor
   registers 0x204/0x206/0x208 and the write-only I/O ports base+0..+3.
-  Listening-test verdict: **none affect audio** — the card appears to have
-  no hardware FM volume control.
+  Listening-test verdict: none audibly affect FM in isolation. Plot twist:
+  a sweep performed while the good CIS was resident in the shadow
+  **accidentally programmed the dead EEPROM back to health** — see VEWSTRB.
+  (The Windows vendor driver proves an FM volume *does* exist; a
+  cross-product routing test is the planned round 2.)
+
+- **VEWSTRB.C** — isolated the mechanism behind that accident: a tracer-byte
+  search across all 16 swept controls, keeping the good CIS in the shadow
+  at all times so a hit could only re-burn a good image. Verdict:
+  **attribute 0x204 bit0 is a whole-shadow EEPROM commit strobe** (pure
+  strobe — a pulse commits all 256 bytes, no writes needed while set).
+  This is the register behind `VEWCIS /BURN`.
 
 - **CIS_GOOD.BIN** — byte-exact 256-byte CIS image from a healthy CF-VEW211
   (also embedded in VEW21XGO for the shadow self-heal; suitable for
