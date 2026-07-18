@@ -28,6 +28,37 @@ register set, the Crystal CS4231A datasheet, and the public OPL FM
 programming model. No vendor driver code. Developed and tested on an IBM
 PC110; it should work on Intel 82365-class controllers generally.
 
+## 2.0 — the unified assembly enabler (PCIC / Card Services / OmniBook SS)
+
+`VEW21XGO.ASM` (→ `VEW21XGO.COM`, NASM, ~10 KB) is the successor to the C
+point enabler: the same card knowledge with **three host backends in one
+binary**, on the architecture proven by our ES1688GO:
+
+| Mode | Host | Notes |
+|---|---|---|
+| `/PCIC` | Intel 82365-class controllers (PC110, ThinkPad 235) | direct port of 1.4, incl. dead-CIS healing |
+| `/CS` | any PCMCIA Card Services 2.1 stack (SystemSoft tested on the OmniBook 530 lineage) | registers as a CS client and **stays TSR**: hot-plug configures the card on insert, a later run live-reconfigures through the resident copy, `/OFF` releases it |
+| `/OB` | HP OmniBook 300/425/430 ROM Socket Services, no CS needed | polite I/O window allocator (codec > FM degrade), 425-probed SS quirks baked in |
+
+With no mode switch the host is auto-detected (CS first, then the OmniBook
+`SS` signature, then a PCIC probe at 3E0h). New/changed switches vs 1.x:
+`/NOFM` (don't claim the 388h window), `/F[ORCE]` (skip the identity check,
+needs `/S=n`), `/T[ONE]` (replaces 1.x's `/BEEP` — and it is now the
+ES1688GO bell "ding" with a proper release, not the sustained organ note),
+and `/I` now also steers the IRQ in CS and OB modes. Everything else
+(`/IO`, `/VOL`, `/SPKR`, `/S`, `/W`, `/OFF`) works as before.
+
+One caveat: **Card Services cannot see a dead-CIS card** (CS reads tuples
+through its own stack, and there is no attribute window to heal through) —
+run `/PCIC` or `/OB` once to heal it, or `VEWCIS /BURN` for the permanent
+repair; after that CS mode identifies the card normally.
+
+Build: `./build.sh` on the host, or on-box
+`C:\NASM\NASM -f bin VEW21XGO.ASM -o VEW21XGO.COM`. Note DOS runs `.COM`
+before `.EXE`: drop the new `VEW21XGO.COM` next to the old `.EXE` and the
+unified enabler takes over the name (delete or rename the `.EXE` to avoid
+confusion).
+
 ## Features
 
 | | Feature |
