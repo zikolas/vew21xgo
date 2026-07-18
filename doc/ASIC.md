@@ -88,10 +88,11 @@ values stepped and every bit toggled individually):
 * write-only I/O ports base+0 … base+3 — **no audible effect**
 
 With the codec mixer previously ruled out, this exhausts the card's visible
-register space: **the CF-VEW211 appears to have no hardware FM volume
-control.** To be confirmed against the period Windows driver on a good-CIS
-card (pending — if its "FM" slider works, watch what it writes; if it maps
-to codec Aux1, it never worked on this card's topology either).
+register space: **the CF-VEW211 has no hardware FM volume control.**
+Cross-checked on a second, known-good unit (2026-07-11): FM is equally loud
+there under both the period vendor driver and VEW21XGO — unit-independent,
+by design, not a fault of the repaired specimen. The Windows-era "FM volume"
+slider (observed working on Win98) is driver-side TL scaling.
 
 ## The accidental EEPROM repair (2026-07-10)
 
@@ -175,17 +176,19 @@ didn't read back.
 2. ~~What 0x206/0x208 do~~ — **answered in part: together they are the
    combination lock for the hidden base+8/+9 bank** (0x38/0x05). Whether
    other values have additional meaning: unknown.
-3. What the hidden bank's three latching bits + write-only bit actually
+3. ~~Why the CIS declares 10 I/O bytes but the card decodes 8~~ —
+   **answered: all 10 decode once the combination lock is set** (base+8/+9
+   are the hidden bank).
+4. ~~FM volume~~ — **CLOSED: no hardware control exists** — exhaustively
+   confirmed (codec incl. XCTL pins, all vendor registers incl. the hidden
+   bank, all ports, both by sweep and by the vendor driver's own super-loud
+   FM), and finally cross-checked on a **known-good unit** (2026-07-11):
+   equally loud under vendor driver and VEW21XGO. Windows-era volume was
+   driver-side TL scaling.
+5. What the hidden bank's three latching bits + write-only bit actually
    control (not FM level; not audibly anything yet).
-4. FM volume: **no hardware control exists** — exhaustively confirmed
-   (codec incl. XCTL pins, all vendor registers incl. the hidden bank,
-   all ports, both by sweep and by the vendor driver's own super-loud FM).
-   Windows-era volume was driver-side TL scaling.
-3. Why the CIS declares 10 I/O bytes but the card decodes 8.
-4. Whether any register drives the TC4W66F analog switch, or whether it's
+6. Whether any register drives the TC4W66F analog switch, or whether it's
    hard-wired (e.g. to the CCSR audio bit / #SPKR path).
-5. Windows-driver behaviour of the "FM volume" slider (needs the good-CIS
-   card).
 
 ## Raw report
 
