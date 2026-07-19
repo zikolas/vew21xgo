@@ -39,6 +39,22 @@ Not yet probed (CIS tells us nothing about): codec type at base+4
 declared no 388 range — good sign), vendor regs 0x204/0x206/0x208 /
 CIS shadow / EEPROM strobe presence.
 
+BYTE-EXACT CAPTURE DONE (2026-07-19, manual PCIC dump over COMrade,
+two identical read passes, socket restored as-found):
+probes/CIS_VEW212.BIN = the 256 dense bytes as the card presents them
+(crc32 94F29A81).  Three findings vs the reconstruction:
+  1. the tuple chain was EXACT - every tuple, string and checksum
+     byte matched;
+  2. one hidden byte after the FF end marker: dense[105] = 0x69
+     (the reconstruction assumed 00);
+  3. THE SHADOW IS 128 DENSE BYTES, MIRRORED: dense 128-255 repeat
+     0-127 (and odd host bytes mirror even).  So the EEPROM/shadow is
+     half the 211's size - and if the mirror applies to WRITES,
+     injecting a 256-byte image whose top half is zeros would ALIAS
+     ZEROS OVER THE REAL CONTENT.  VEWCIS's cis_212 table must carry
+     the mirrored layout (top half = copy of bottom half, matching
+     this capture) before any /212 injection is ever attempted.
+
 HARDWARE (the operator, 2026-07-19): the card has an OPL4 (YMF278) MIDI
 WAVETABLE built in, and he believes the YMF262 is ALSO fitted (211
 board + wavetable section is the working theory — the OPL4 contains an
@@ -53,12 +69,75 @@ lock (fixed 0xA_ upper nibble at +8, 0xBC at +9, no audible effect =
 plumbing with nothing behind it).  PRIME SUSPECT: on the 212,
 0x538/0x539 (possibly behind the same lock) = OPL4 wave addr/data.
 
-Recon plan (when the box is next available):
-  1. enable (auto-detect: IBMDOSCS is resident on the PC110, so CS
-     mode — which doubles as the /CS backend's first hardware test)
+VENDOR DOS STACK (behavior-level observations only — we are strictly
+clean-room and do not read/disassemble these binaries):
+  CONFIG.SYS:    DEVICE=OPL4TSR.SYS
+  AUTOEXEC.BAT:  scprodos.com /C330 /M388 /I9
+                 opl4drv.com /LP7 /P64
+  Net effect (per the operator): MPU-401 at port 330 + OPL4 at 388, IRQ 9.
+  Measured conventional-memory footprint (the operator, using EZ-Play as the
+  CS stack - SystemSoft's low-footprint option): ~70K total = EZ-Play
+  (~42K) + scprodos 3K + OPL4DRV 24K + OPL4TSR 1K.  Our targets:
+  sound-only = 0K resident (point enabler exits); GM MIDI = our
+  renderer TSR, aiming well under OPL4DRV's 24K.
+  Reading: scprodos = their point enabler (MIDI Control 330, Music 388,
+  IRQ 9); OPL4TSR/opl4drv = the AWE32/AWEUTIL architecture — the card
+  has a REAL hardware MPU-401 receive UART at 330 raising IRQ 9, and
+  the resident driver renders the MIDI stream on the OPL4 wavetable.
+  Neither 330 nor any wave registers appear in the CIS (this family
+  underdeclares — cf. the REX-5572's undeclared sound index).
+  Consequences: (a) our own GM TSR can be interrupt-driven — no V86
+  port-trap needed; (b) "OPL4 on 388" suggests the OPL4's FM core may
+  itself serve 388, making 38C/38D (the standard YMF278 wave pair
+  offset) co-prime suspect with base+8/+9 — and weakening the
+  separate-YMF262 theory; (c) the MPU/wave ENABLE is undeclared —
+  hunt it in the vendor registers / hidden-bank arming.
+
+SAFETY DISCIPLINE (BINDING — this card is rare, expensive, and we
+have exactly one; the operator's rule 2026-07-19):
+  * I/O-space device registers (codec, OPL3/OPL4, MPU) are volatile
+    and fair game — reads and ordinary driver-style writes only.
+  * ATTRIBUTE-space vendor registers are the hazard: somewhere in
+    there lives an EEPROM commit strobe (0x204 bit0 on the 211), and
+    strobing with a bad shadow permanently corrupts the card's
+    identity.  Therefore:
+      1. capture + verify the byte-exact CIS dump BEFORE any
+         attribute-space write experiment (it is the insurance that
+         makes worst-case corruption fully recoverable);
+      2. NEVER write attr 0x204 on the 212 (assume strobe); no /BURN
+         or /RESTORE on this healthy card, ever;
+      3. any 0x206/0x208 experiment: targeted single writes only,
+         shadow read-back-verified intact immediately before - NO
+         blind sweeps on this card (a sweep is how the 211 hit its
+         strobe by accident);
+      4. Vpp stays 5V always; standard power sequencing only.
+
+CLEAN-ROOM BOUNDARY for vendor-stack probing (agreed 2026-07-19, same
+rule as the 211's DUMP-VND diff): observing the HARDWARE under the
+live vendor stack is fine - register/state dumps, I/O decode maps,
+stimulus/response (MIDI bytes to 330, watch IRQ/status), state diffs
+around a played note, command lines and audible behavior.  Off-limits:
+hex-viewing/disassembling their binaries on disk OR in RAM, debug-
+stepping their code, lifting data tables from their memory (the GM
+map comes from the YRW801's own in-ROM headers + Yamaha docs).
+Method note: vendor probing happens under their CS boot - reuse the
+race-free DUMP-VND method (attr via already-mapped windows + direct
+I/O port reads, NO PCIC index-register manipulation while CS owns it).
+Sequencing: vendor-state diff vs our-enabler state = the enable-recipe
+candidates; then PROVE the recipe from scratch on a clean boot with
+our own writes.
+
+Recon plan (when the box is next available; probe windows must be
+WIDER than the enabler's — 388-38F and 330-331 need mapping to be
+seen at all; ORDER MATTERS - the dump comes before any attr writes):
+  1. enable via VEW21XGO (auto-detect picks the right host)
   2. codec I12 chip ID, opl_detect at 388 (expect OPL3-class)
   3. OPL4 presence the canonical way: NEW/NEW2 dance via 38A/38B bank
-     1 reg 05, then wave Device ID register 0x02 == 0x20 (YMF278B)
-  4. raw-read base+8/+9 with and without the 206/208 combination lock;
-     if live, try the wave ID through them
+     1 reg 05, then wave Device ID register 0x02 == 0x20 (YMF278B) —
+     try the wave pair at 38C/38D first, then base+8/+9
+  4. does 330/331 decode at all under our config?  if not, hunt the
+     enable in attr 0x204/0x206/0x208 and the hidden bank (the 211's
+     combination lock was 206=0x38 + 208=0x05)
   5. wave ROM presence (YRW801?) via the OPL4 memory interface
+  6. capture a byte-exact 256-byte CIS dump (verify the reconstructed
+     VEWCIS /212 image)
