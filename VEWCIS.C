@@ -1,14 +1,21 @@
-/* VEWCIS.C - CF-VEW211 CIS repair tool: heal the CIS and NOTHING else.
+/* VEWCIS.C - CF-VEW211/CF-VEW212 CIS repair tool: heal the CIS, NOTHING else.
  * Copyright (c) 2026 zikolas. MIT License.
  *
  * The minimal companion to VEW21XGO: finds the card, and if its CIS reads
- * as a dead fill wall (failed EEPROM load), injects the known-good 256-byte
- * CIS image into the ASIC's shadow RAM - then stops. It does NOT write the
- * COR, map I/O, route an IRQ or touch the mixer. The card is left powered,
- * un-configured, and self-describing, ready for whatever CIS-reading stack
- * you actually want to use (Card Services, EZ-Play, the period vendor
- * drivers, DTPL...). Without /BURN the injection is volatile: it survives
- * warm reboots (the card keeps power) but not power-down or eject.
+ * as a dead fill wall (failed EEPROM load), injects the selected card's
+ * known-good 256-byte CIS image into the ASIC's shadow RAM - then stops.
+ * It does NOT write the COR, map I/O, route an IRQ or touch the mixer.
+ * The card is left powered, un-configured, and self-describing, ready for
+ * whatever CIS-reading stack you actually want to use (Card Services,
+ * EZ-Play, the period vendor drivers, DTPL...). Without /BURN the
+ * injection is volatile: it survives warm reboots (the card keeps power)
+ * but not power-down or eject.
+ *
+ * A DEAD CARD CANNOT SAY WHICH MODEL IT IS, so every operation that
+ * writes the shadow requires the model on the command line: /211 or
+ * /212.  (Since v2.0 the VEW21XGO enabler never writes the CIS itself -
+ * it enables dead-CIS cards read-only from built-in config, and repair
+ * lives here, on purpose.)
  *
  * /BURN makes the repair PERMANENT. The MEI ASIC's config register at
  * attribute 0x204 (undeclared in the CIS) is a whole-shadow EEPROM commit
@@ -19,12 +26,17 @@
  * strobe, then power-cycles again and verifies the EEPROM reloads the
  * pristine image by itself.
  *
- * Usage: VEWCIS [/BURN | /RESTORE] [/S=0..7] [/W=D000]
+ * Usage: VEWCIS [/211 | /212] [/BURN | /RESTORE] [/S=0..7] [/W=D000]
+ *   /211      the reference image is the CF-VEW211 dump
+ *   /212      the reference image is the CF-VEW212 "Sound Card PRO" image
+ *             (RECONSTRUCTED from a tuple-level dump of a healthy unit,
+ *             2026-07-19 - functionally complete and self-consistent, but
+ *             not yet verified byte-exact against a raw EEPROM read;
+ *             capture one before trusting a /212 burn on a real casualty)
  *   /BURN     permanently program the repaired CIS into the card's EEPROM
  *             (verified across a power cycle; skips if EEPROM already healthy)
- *   /RESTORE  like /BURN but unconditional: burns the reference image even
- *             over a VALID CIS (for undoing test images / factory-resetting
- *             to the known-good dump)
+ *   /RESTORE  like /BURN but unconditional: burns the selected reference
+ *             image even over a VALID CIS (undo test images / factory-reset)
  *   /S=dec  socket 0..7 (default: auto-scan)
  *   /W=hex  attribute-window segment (default D000, auto-relocates if busy)
  *
@@ -35,15 +47,16 @@
 #include <stdlib.h>
 #include <i86.h>
 
-#define VEWCIS_VER "1.2"
+#define VEWCIS_VER "2.0"
 #define PCIC_BASE 0x3E0
 #define MAX_SOCKET 7
-#define VEW_MANF 0x0032
-#define VEW_CARD 0x0001
+#define VEW_MANF    0x0032
+#define VEW211_CARD 0x0001
+#define VEW212_CARD 0x0501
 #define STROBE_OFF 0x204                /* attr addr: EEPROM commit strobe, bit0 */
 
 /* Known-good CF-VEW211 CIS (256 bytes), from a healthy unit's DTPL dump. */
-static const unsigned char cis_img[256] = {
+static const unsigned char cis_211[256] = {
     0x01,0x02,0x00,0xFF,0x17,0x02,0xD1,0xFF,0x15,0x64,0x04,0x01,0x4D,0x61,0x74,0x73,
     0x75,0x73,0x68,0x69,0x74,0x61,0x20,0x45,0x6C,0x65,0x63,0x74,0x72,0x69,0x63,0x20,
     0x49,0x6E,0x64,0x75,0x73,0x74,0x72,0x69,0x61,0x6C,0x20,0x43,0x6F,0x2E,0x2C,0x20,
@@ -61,6 +74,35 @@ static const unsigned char cis_img[256] = {
     0x30,0x2B,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 };
+
+/* CF-VEW212 "Sound Card PRO" CIS (256 bytes) - RECONSTRUCTED 2026-07-19
+ * from a tuple-level dump of a healthy unit (probes/CIS_VEW212.TXT):
+ * every tuple byte is as dumped, the VERS_1 length self-checks (0x2E),
+ * and padding past the end marker is assumed zero. Functionally complete,
+ * but NOT yet verified byte-exact against a raw EEPROM read - capture one
+ * from the healthy card before trusting a /212 burn on a real casualty. */
+static const unsigned char cis_212[256] = {
+    0x01,0x02,0x00,0xFF,0x17,0x02,0xD1,0xFF,0x15,0x2E,0x04,0x01,0x50,0x61,0x6E,0x61,
+    0x73,0x6F,0x6E,0x69,0x63,0x00,0x53,0x6F,0x75,0x6E,0x64,0x20,0x43,0x61,0x72,0x64,
+    0x20,0x50,0x52,0x4F,0x00,0x43,0x46,0x2D,0x56,0x45,0x57,0x32,0x31,0x32,0x00,0x56,
+    0x65,0x72,0x20,0x31,0x2E,0x30,0x00,0xFF,0x1A,0x05,0x01,0x20,0x00,0x02,0x03,0x1B,
+    0x14,0xE0,0x81,0x9D,0x11,0x55,0x1E,0xFC,0x23,0xAC,0x61,0x30,0x05,0x09,0x88,0x03,
+    0x03,0x30,0x80,0x0E,0x08,0x20,0x04,0x32,0x00,0x01,0x05,0x21,0x02,0xFF,0x00,0x10,
+    0x05,0xA1,0xFF,0x5F,0x00,0xCD,0x14,0x00,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* the image selected by /211 or /212; NULL until the user chooses */
+static const unsigned char *ref_img  = 0;
+static const char          *ref_name = "";
 
 static unsigned pcic_idx = PCIC_BASE;
 static unsigned sockoff  = 0;
@@ -102,7 +144,12 @@ static void read_cis(unsigned seg)
     }
     while (vi > 0 && g_vers[vi-1]==' ') g_vers[--vi]=0;
 }
-static int is_vew(void){ return (g_manf == VEW_MANF && g_card == VEW_CARD) || g_cisdead; }
+/* a healthy 211 or 212, by MANFID */
+static int is_healthy_vew(void)
+{
+    return g_manf == VEW_MANF && (g_card == VEW211_CARD || g_card == VEW212_CARD);
+}
+static int is_vew(void){ return is_healthy_vew() || g_cisdead; }
 
 /* is host segment cseg..cseg+3 pages covered by an enabled window anywhere? */
 static int mem_win_overlaps(unsigned cseg)
@@ -188,13 +235,13 @@ static int probe_socket(unsigned memseg)
     return 0;
 }
 
-/* inject the good image into the shadow; 1 = readback verified */
+/* inject the selected image into the shadow; 1 = readback verified */
 static int inject(unsigned memseg)
 {
     unsigned char __far *a = (unsigned char __far *)MK_FP(memseg, 0);
     int i;
-    for (i = 0; i < 256; i++) a[i * 2] = cis_img[i];
-    for (i = 0; i < 256; i++) if (a[i * 2] != cis_img[i]) return 0;
+    for (i = 0; i < 256; i++) a[i * 2] = ref_img[i];
+    for (i = 0; i < 256; i++) if (a[i * 2] != ref_img[i]) return 0;
     return 1;
 }
 /* pulse the EEPROM commit strobe (attr 0x204 bit0), then let the burn finish */
@@ -205,12 +252,12 @@ static void strobe(unsigned memseg)
     a[STROBE_OFF] = 0x00; iod(400);
     MS(3000);
 }
-/* full compare of the (freshly loaded) shadow against the image */
+/* full compare of the (freshly loaded) shadow against the selected image */
 static int eeprom_ok(unsigned memseg)
 {
     unsigned char __far *a = (unsigned char __far *)MK_FP(memseg, 0);
     int i;
-    for (i = 0; i < 256; i++) if (a[i * 2] != cis_img[i]) return 0;
+    for (i = 0; i < 256; i++) if (a[i * 2] != ref_img[i]) return 0;
     return 1;
 }
 
@@ -233,13 +280,18 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         char *arg = argv[i], *vp;
         if (arg[0] != '/' && arg[0] != '-') continue;
-        if      (sw(arg, "BURN", &vp)) burn = 1;
+        if      (sw(arg, "211", &vp)) { ref_img = cis_211; ref_name = "CF-VEW211"; }
+        else if (sw(arg, "212", &vp)) { ref_img = cis_212; ref_name = "CF-VEW212 (reconstructed image)"; }
+        else if (sw(arg, "BURN", &vp)) burn = 1;
         else if (sw(arg, "RESTORE", &vp)) { burn = 1; restore = 1; }
         else if (sw(arg, "S", &vp)) { if (vp) { sock = (unsigned)strtol(vp, 0, 10); sgiven = 1; } }
         else if (sw(arg, "W", &vp)) { if (vp) { memseg = (unsigned)strtol(vp, 0, 16); wgiven = 1; } }
         else printf("Ignoring unknown switch: %s\n", arg);
     }
     if (sgiven && sock > MAX_SOCKET) { printf("Bad /S=%u : 0..%u\n", sock, MAX_SOCKET); return 2; }
+    if (restore && !ref_img) {
+        printf("/RESTORE needs the card model: /211 or /212.\n"); return 2;
+    }
     if (!wgiven) {
         unsigned freeseg = find_free_window(memseg);
         if (freeseg != memseg) { printf("Window %04X busy; using %04X.\n", memseg, freeseg); memseg = freeseg; }
@@ -263,8 +315,8 @@ int main(int argc, char **argv)
         if (!any) { printf("No 82365-class PCIC found.\n"); return 1; }
     }
     if (!found) {
-        if (g_manf) printf("Not a CF-VEW211 (found MANFID %04X/%04X \"%s\").\n", g_manf, g_card, g_vers);
-        else        printf("No CF-VEW211 (or dead-CIS card) found.\n");
+        if (g_manf) printf("Not a CF-VEW211/212 (found MANFID %04X/%04X \"%s\").\n", g_manf, g_card, g_vers);
+        else        printf("No CF-VEW211/212 (or dead-CIS card) found.\n");
         return 3;
     }
 
@@ -275,22 +327,29 @@ int main(int argc, char **argv)
         printf("   /BURN: power-cycling to read the true EEPROM state...\n");
         if (!power_cycle(memseg)) { printf("   power cycle failed\n"); return 1; }
         read_cis(memseg);
-        if (!restore && !g_cisdead && g_manf == VEW_MANF && g_card == VEW_CARD) {
+        if (!restore && !g_cisdead && is_healthy_vew()) {
             printf("   EEPROM already healthy (\"%s\") - nothing to burn.\n", g_vers);
             wr(0x06, rd(0x06) & ~0x01);
             return 0;
         }
+        if (!ref_img) {
+            printf("   CIS is %s - a dead card cannot say which model it is:\n",
+                   g_cisdead ? "DEAD" : "not a known VEW21x");
+            printf("   specify /211 or /212 to burn.\n");
+            wr(0x06, rd(0x06) & ~0x01);
+            return 2;
+        }
         fill = g_cisfill;
         if (!g_cisdead && restore)
-            printf("   /RESTORE: current CIS is valid (\"%s\") - overwriting with reference.\n", g_vers);
+            printf("   /RESTORE: current CIS is valid (\"%s\") - overwriting with %s.\n", g_vers, ref_name);
         if (!inject(memseg)) { printf("   shadow injection FAILED - aborting.\n"); return 4; }
-        printf("   shadow %s - pulsing commit strobe (attr 204.0)...\n",
-               g_cisdead ? "healed" : "loaded with reference image");
+        printf("   shadow %s %s - pulsing commit strobe (attr 204.0)...\n",
+               g_cisdead ? "healed with" : "loaded with", ref_name);
         strobe(memseg);
         if (!power_cycle(memseg)) { printf("   power cycle failed\n"); return 1; }
         read_cis(memseg);
         wr(0x06, rd(0x06) & ~0x01);
-        if (eeprom_ok(memseg) || (!g_cisdead && g_manf == VEW_MANF && g_card == VEW_CARD)) {
+        if (eeprom_ok(memseg) || (!g_cisdead && is_healthy_vew())) {
             printf("   EEPROM PERMANENTLY REPAIRED + verified across power cycle.\n");
             printf("   Card self-describes from cold: \"%s\"\n", g_vers);
             return 0;
@@ -305,11 +364,17 @@ int main(int argc, char **argv)
         wr(0x06, rd(0x06) & ~0x01);
         return 0;
     }
+    if (!ref_img) {
+        printf("   CIS is DEAD (stuck %02X fill) - a dead card cannot say which model\n", g_cisfill);
+        printf("   it is: specify /211 or /212 to inject.\n");
+        wr(0x06, rd(0x06) & ~0x01);
+        return 2;
+    }
     fill = g_cisfill;
     if (inject(memseg)) {
         read_cis(memseg);
         wr(0x06, rd(0x06) & ~0x01);
-        printf("   CIS was dead (stuck %02X fill) - injected + verified.\n", fill);
+        printf("   CIS was dead (stuck %02X fill) - injected %s + verified.\n", fill, ref_name);
         printf("   Card now self-describing: \"%s\"\n", g_vers);
         printf("   (volatile: re-run after power-down/eject, or use /BURN to make it permanent)\n");
         return 0;
