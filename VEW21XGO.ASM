@@ -1,7 +1,8 @@
 ;==========================================================================
-;  VEW21XGO 2.0 - unified clean-room DOS enabler for the Panasonic
-;               CF-VEW211 PCMCIA sound card (Matsushita 1994: CS4231A WSS
-;               codec + YMF262 OPL3), with three host backends in one .COM:
+;  VEW21XGO 2.1 - unified clean-room DOS enabler for the Panasonic
+;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
+;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
+;               adds an OPL4 wavetable), three host backends in one .COM:
 ;
 ;    /PCIC  Intel 82365-class point enabler (direct PCIC programming).
 ;           Lineage: our VEW21XGO 1.x (C, IBM PC110), ported to asm.
@@ -28,22 +29,31 @@
 ;    The codec powers up muted; FM does NOT pass through the codec (it sums
 ;    after it, and has no hardware volume - proven exhaustively).
 ;
-;  DEAD-CIS SELF-HEALING (the 1.x party trick, kept): the ASIC shadows the
-;  CIS in host-writable RAM loaded from a 93LC56 EEPROM; when that load
-;  fails the whole tuple region reads one stuck fill byte.  In PCIC and OB
-;  modes (which map the attribute window themselves) VEW21XGO detects the
-;  uniform-fill signature and injects the full known-good 256-byte image:
-;  the card then identifies itself normally until next power-down.  CS mode
-;  reads tuples through the Card Services stack and cannot reach the shadow,
-;  so a dead-CIS card must be healed first (one /PCIC or /OB run, or the
-;  standalone VEWCIS tool - VEWCIS /BURN repairs the EEPROM permanently).
+;  THE CF-VEW212 "Sound Card PRO" (MANFID 0032/0501, CIS captured
+;  2026-07-19 - probes/CIS_VEW212.TXT): same ASIC family, and its single
+;  config entry is BIT-IDENTICAL to the 211's default - but it is index
+;  20h ONLY, so the codec base is FIXED at 530h (no E80/F40/604; /IO is
+;  overridden with a note).  It carries an OPL4 (YMF278) wavetable whose
+;  register mapping is still under recon - this enabler brings up the
+;  codec + OPL3 side, which the 212 declares identically.
+;
+;  DEAD-CIS CARDS: the ASIC shadows the CIS in RAM loaded from a 93LC56
+;  EEPROM; when that load fails the whole tuple region reads one stuck
+;  fill byte.  In PCIC and OB modes (which read attribute space
+;  themselves) such a card is still ENABLED from the built-in
+;  configuration - READ-ONLY: this enabler never writes the CIS shadow.
+;  Repair belongs to the standalone VEWCIS tool, which takes the card
+;  model on the command line (/211 or /212 - a dead card cannot say
+;  which it is; /BURN makes it permanent).  Card Services cannot see a
+;  dead-CIS card at all: repair it first, then use /CS.
 ;
 ;  Usage:
 ;    VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
 ;             [/NOFM] [/S=n] [/W=D000] [/F[ORCE]] [/OFF]
 ;
 ;    /IO=hex   codec base: 530 (default) / E80 / F40 / 604 (picks the
-;              matching COR index; codec regs at base+4, OPL3 always 388)
+;              matching COR index; codec regs at base+4, OPL3 always 388;
+;              the alternates are 211-only - a 212 is forced to 530)
 ;    /I=dec    IRQ to route: 7, 9, 10 or 11 only (level-mode card;
 ;              default 0 = none - FM needs no IRQ)
 ;    /VOL=dec  DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
@@ -81,7 +91,7 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0200h
+VGVER   equ 0201h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
 VBMAX   equ 40h                       ; VERS_1 capture buffer size
@@ -149,7 +159,9 @@ r_cid    db 0                         ; CS4231 I12 chip ID
 r_oplv   db 0                         ; 0 = no OPL, 2 = OPL2, 3 = OPL3
 cis_state db 0                        ; 0 = healthy, 1 = healed, 2 = dead
 matched  db 0                         ; 1 = MANFID hit (0 = forced/dead-CIS)
+k_flags  db 0                         ; K_* flags from the manifest hit
 k_name   dw n_unk                     ; display name
+r_iofix  db 0                         ; 1 = /IO overridden to 530 (fixed-base)
 cfgbase  dw VEW_COR                   ; COR base from CISTPL_CONFIG
 mapflags db 0                         ; M_FM mapped this run
 r_ir1    dw 0                         ; CS IRQ ladder step-1 refusal status
@@ -247,25 +259,72 @@ p_rirq_i db 0                         ;   IRQ to release
 P_RIRQ_LEN equ 5
 
 ;==========================================================================
-;  identify - is [manfid] an intact CF-VEW211?  CF clear = yes.
-;  (Single-card manifest: dead-CIS units are claimed separately by their
-;  uniform-fill signature in the PCIC/OB probe paths.)
+;  KNOWN-CARD MANIFEST (resident: the CS hot-plug path identifies too).
+;  Dead-CIS units are claimed separately by their uniform-fill signature
+;  in the PCIC/OB probe paths and enabled from the built-in default
+;  config, READ-ONLY (both cards share it bit-for-bit).  A dead card
+;  cannot say which model it is, so CIS repair lives in VEWCIS, which
+;  takes the model on the command line.
+;
+;  K_FIX530: the card decodes ONLY COR index 20h / codec base 530h (the
+;  212 declares no alternates) - a different /IO is overridden, noted in
+;  the summary via [r_iofix].
+;
+;  record: +0 manf, +2 card, +4 flags, +5 name ptr
 ;==========================================================================
+K_FIX530 equ 01h
+KREC     equ 7
+ktab:
+        dw VEW_MANF, 0001h
+        db 0
+        dw n_vew
+        dw VEW_MANF, 0501h
+        db K_FIX530
+        dw n_v212
+        dw 0, 0                       ; end of table
+
+; identify - match [manfid] against the manifest.  CF clear = hit
+; ([matched]/[k_flags]/[k_name] filled, fixed-base override applied).
 identify:
-        cmp  word [manfid], VEW_MANF
-        jne  .no
-        cmp  word [manfid+2], VEW_CARD
-        jne  .no
-        mov  word [k_name], n_vew
+        push si
+        push ax
+        mov  si, ktab
+.next:  mov  ax, [si]
+        or   ax, [si+2]
+        jz   .unk
+        mov  ax, [manfid]
+        cmp  ax, [si]
+        jne  .miss
+        mov  ax, [manfid+2]
+        cmp  ax, [si+2]
+        jne  .miss
+        mov  al, [si+4]
+        mov  [k_flags], al
+        mov  ax, [si+5]
+        mov  [k_name], ax
         mov  byte [matched], 1
+        test byte [k_flags], K_FIX530 ; fixed-base card: only 530h exists
+        jz   .ok
+        cmp  word [o_io], 0530h
+        je   .ok
+        mov  word [o_io], 0530h
+        mov  byte [coridx], 20h
+        mov  byte [r_iofix], 1        ; note the override in the summary
+.ok:    pop  ax
+        pop  si
         clc
         ret
-.no:    stc
+.miss:  add  si, KREC
+        jmp  .next
+.unk:   pop  ax
+        pop  si
+        stc
         ret
 
 ; ---- force_ident: /FORCE identity for an unknown/unreadable card --------
 force_ident:
         mov  word [k_name], n_unk
+        mov  byte [k_flags], 0
         mov  byte [matched], 0
         ret
 
@@ -398,6 +457,7 @@ cs_configure:
         mov  byte [r_irq], 0FFh
         mov  byte [mapflags], 0
         mov  byte [matched], 0
+        mov  byte [r_iofix], 0
 
         mov  ax, [arg_sock]           ; stamp the socket into every packet
         mov  [p_tup], ax
@@ -1685,7 +1745,8 @@ pr_lastid:                            ; 'MANFID xxxx/xxxx "vers".'
         ret
 
 ; ---- ob_try: probe socket [sock].  CF=0 accepted (window 0 left mapped,
-;      identity set, dead CIS healed).  CF=1 rejected, [failwhy] = why. ---
+;      identity set; a dead CIS is accepted read-only).  CF=1 rejected,
+;      [failwhy] = why. ---------------------------------------------------
 ob_try:
         mov  byte [failwhy], FW_NOCARD
         mov  byte [cis_state], 0
@@ -1751,17 +1812,12 @@ ob_try:
         call cis_parse                ; CF ignored: defaults hold
         call cis_deadchk
         jnc  .ident
-        call cis_heal                 ; dead wall: inject the good image
-        call cis_parse
-        call cis_deadchk
-        jnc  .healed
-        mov  byte [cis_state], 2      ; shadow won't take: built-in config
-        mov  word [cfgbase], VEW_COR
-        mov  word [k_name], n_vew
+        mov  byte [cis_state], 2      ; dead wall: enable from the built-in
+        mov  word [cfgbase], VEW_COR  ; config, READ-ONLY - repair is
+        mov  word [k_name], n_dead    ; VEWCIS's job, never ours
+        mov  byte [k_flags], 0
         mov  byte [matched], 0
         jmp  .ok
-.healed:
-        mov  byte [cis_state], 1
 .ident:
         call identify
         jnc  .ok
@@ -2345,8 +2401,8 @@ pc_present:                           ; CF clear = 82365-class ID answers
         ret
 
 ; ---- pc_probe: power socket [sock] (already selected), map its attribute
-;      window at [o_wseg], read the CIS, identify (healing a dead CIS on
-;      the way).  CF=0: ours (left powered + mapped).  CF=1: put back the
+;      window at [o_wseg], read the CIS, identify (a dead CIS is accepted
+;      read-only).  CF=0: ours (left powered + mapped).  CF=1: put back the
 ;      way we found it - a card ALREADY running there is restored exactly,
 ;      not powered off. ---------------------------------------------------
 pc_probe:
@@ -2479,17 +2535,12 @@ pc_probe:
         call cis_parse                ; CF ignored: cfgbase stays 200h
         call cis_deadchk
         jnc  .ident
-        call cis_heal                 ; dead wall: inject the good image
-        call cis_parse
-        call cis_deadchk
-        jnc  .healed
-        mov  byte [cis_state], 2      ; shadow won't take: built-in config
-        mov  word [cfgbase], VEW_COR
-        mov  word [k_name], n_vew
+        mov  byte [cis_state], 2      ; dead wall: enable from the built-in
+        mov  word [cfgbase], VEW_COR  ; config, READ-ONLY - repair is
+        mov  word [k_name], n_dead    ; VEWCIS's job, never ours
+        mov  byte [k_flags], 0
         mov  byte [matched], 0
         jmp  .ours
-.healed:
-        mov  byte [cis_state], 1
 .ident:
         call identify
         jnc  .ours
@@ -2721,36 +2772,6 @@ cis_deadchk:
         clc
         ret
 
-; cis_heal: inject the known-good 256-byte CIS image into the card's
-; shadow RAM through the attr window at [o_wseg] (even host addresses
-; carry the data), then re-pull cisbuf for the re-parse.  The card then
-; identifies itself normally to ANY software until next power-down.
-cis_heal:
-        push ax
-        push bx
-        push cx
-        push si
-        push es
-        mov  es, [o_wseg]
-        mov  si, cis_img
-        xor  bx, bx
-        mov  cx, 256
-.w:
-        lodsb
-        mov  [es:bx], al
-        inc  bx
-        inc  bx
-        loop .w
-        mov  ax, 5
-        call ms_delay
-        call cis_even
-        pop  es
-        pop  si
-        pop  cx
-        pop  bx
-        pop  ax
-        ret
-
 ; cis_parse: walk the dense CIS in cisbuf.  Fills [manfid], [cfgbase]
 ; (default 200h), versbuf/[verslen].  CF set = no CISTPL_CONFIG found.
 cis_parse:
@@ -2926,9 +2947,7 @@ report:
 ; line 2: CIS status
         cmp  byte [cis_state], 0
         je   .cnorm
-        cmp  byte [cis_state], 1
-        je   .cheal
-        mov  si, m_cisdead            ; still dead: built-in config
+        mov  si, m_cisdead            ; dead: running on built-in config
         call prstr
         mov  al, [cisfill]
         call prhex2
@@ -2936,10 +2955,6 @@ report:
         call prstr
         call crlf
         jmp  .cisdone
-.cheal:
-        mov  si, m_cisheal
-        call prstr
-        call crlf
 .cnorm:
         mov  si, m_cis
         call prstr
@@ -3085,6 +3100,11 @@ report:
         mov  si, m_mix2
         call prstr
 ; optional notes
+        cmp  byte [r_iofix], 0
+        je   .nfx
+        mov  si, m_iofix
+        call prstr
+.nfx:
         cmp  byte [o_spkr], 0
         je   .nspk
         mov  si, m_spkr
@@ -3479,7 +3499,7 @@ errout:                               ; SI = message; print + exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.0 - Panasonic CF-VEW211 unified enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.1 - Panasonic CF-VEW211/212 unified enabler (PCIC/CS/OB)',13,10,0
 m_hostcs:  db 'Host: PCMCIA Card Services',13,10,0
 m_hostob:  db 'Host: Socket Services (OmniBook)',13,10,0
 m_hostpc:  db 'Host: 82365-class PCIC (direct)',13,10,0
@@ -3498,10 +3518,8 @@ m_novers:  db 'unreadable',0
 m_forcedtag: db ' (FORCED)',0
 m_sock1:   db ': socket ',0
 m_auto:    db ' (auto)',0
-m_cisheal: db '   CIS: was DEAD - injected known-good image; card now'
-           db ' self-describing',0
 m_cisdead: db '   CIS: DEAD (stuck ',0
-m_cisdead2: db ' fill) - injection failed, using built-in config',0
+m_cisdead2: db ' fill) - using built-in config; repair with VEWCIS',0
 m_cis:     db '   CIS: ',0
 m_manf1:   db '  (MANFID ',0
 m_manf2:   db 'MANFID ',0
@@ -3524,6 +3542,8 @@ m_win:     db 'win',0
 m_comma:   db ', ',0
 m_mix:     db '   mixer: DAC -',0
 m_mix2:    db 'dB, Aux1/Aux2 muted (FM sums after the codec)',13,10,0
+m_iofix:   db '   Note: this card has no alternate bases - codec forced'
+           db ' to 530h.',13,10,0
 m_spkr:    db '   #SPKR audio ON - card mixer routed to host speaker',13,10,0
 m_toned:  db '   TEST: FM tone sent',13,10,0
 ; ---- socket verdicts (PCIC + OB) ----
@@ -3534,9 +3554,9 @@ m_unrec:   db ': unrecognized card - ',0
 m_addman:  db '  Use /F to force, if you are sure.',13,10,0
 m_addman2: db '  Use /F /S=n to force, if you are sure.',13,10,0
 m_addman3: db '  Use /FORCE to force, if you are sure.',13,10,0
-m_noknown: db 'No CF-VEW211 (or dead-CIS card) in any socket.',13,10,0
-m_noknown2: db 'No CF-VEW211 (or dead-CIS card) found in any socket.',13,10,0
-m_nomatch: db 'Not the CF-VEW211 (last seen ',0
+m_noknown: db 'No CF-VEW211/212 (or dead-CIS card) in any socket.',13,10,0
+m_noknown2: db 'No CF-VEW211/212 (or dead-CIS card) found in any socket.',13,10,0
+m_nomatch: db 'Not a CF-VEW211/212 (last seen ',0
 m_badcis:  db 'CIS invalid / config register base out of range',13,10,0
 ; ---- OB mode ----
 m_noss:    db 'No PCMCIA Socket Services (INT 1A) on this machine.',13,10,0
@@ -3565,13 +3585,13 @@ m_regyes:  db 'yes',13,10,0
 m_regno:   db 'NO (continuing anyway)',13,10,0
 m_probe:   db 'Probing socket ',0
 m_s_tup:   db '  no card / CIS unreadable, status ',0
-m_s_wrong: db '  not a CF-VEW211: MANFID ',0
+m_s_wrong: db '  not a CF-VEW211/212: MANFID ',0
 m_s_io:    db '  RequestIO refused, status ',0
 m_s_cfg:   db '  RequestConfiguration refused, status ',0
 m_nocard:  db 'Card not enabled.',13,10,0
-m_cshint:  db '(A dead-CIS card is invisible to Card Services: heal it'
-           db ' first with one',13,10,' /PCIC or /OB run - or VEWCIS /BURN'
-           db ' for a permanent repair.)',13,10,0
+m_cshint:  db '(A dead-CIS card is invisible to Card Services - repair it'
+           db ' first with',13,10,' VEWCIS /211 or /212 + /BURN, then use'
+           db ' /CS.)',13,10,0
 m_resident: db 'Staying resident - insert the card and it will be'
            db ' configured.',13,10,0
 m_via:     db 'Reconfigured via the resident copy:',13,10,0
@@ -3583,6 +3603,8 @@ m_offnone: db 'Nothing resident to switch off.',13,10,0
 m_csnoforce: db 'Note: /FORCE is not supported in CS mode - ignored.',13,10,0
 ; ---- names ----
 n_vew:     db 'Panasonic CF-VEW211',0
+n_v212:    db 'Panasonic CF-VEW212 (Sound Card PRO)',0
+n_dead:    db 'CF-VEW21x (dead CIS)',0
 n_unk:     db 'Unknown card',0
 
 ;==========================================================================
@@ -3652,26 +3674,5 @@ res_off:   dw 0
 fptr:      dd 0
 hndoff:    db 0
 res_badver: db 0
-
-; Known-good CF-VEW211 CIS (256 bytes), from a healthy unit's dump.
-; Injected into the card's CIS shadow RAM when the on-card copy is dead.
-; (Transient: the CS resident cannot reach the shadow, so it never heals.)
-cis_img:
-    db 0x01,0x02,0x00,0xFF,0x17,0x02,0xD1,0xFF,0x15,0x64,0x04,0x01,0x4D,0x61,0x74,0x73
-    db 0x75,0x73,0x68,0x69,0x74,0x61,0x20,0x45,0x6C,0x65,0x63,0x74,0x72,0x69,0x63,0x20
-    db 0x49,0x6E,0x64,0x75,0x73,0x74,0x72,0x69,0x61,0x6C,0x20,0x43,0x6F,0x2E,0x2C,0x20
-    db 0x4C,0x74,0x64,0x2E,0x00,0x50,0x61,0x6E,0x61,0x73,0x6F,0x6E,0x69,0x63,0x20,0x53
-    db 0x6F,0x75,0x6E,0x64,0x20,0x43,0x61,0x72,0x64,0x00,0x43,0x46,0x2D,0x56,0x45,0x57
-    db 0x32,0x31,0x31,0x00,0x56,0x65,0x72,0x73,0x69,0x6F,0x6E,0x20,0x31,0x2E,0x31,0x20
-    db 0x41,0x70,0x6C,0x2E,0x20,0x32,0x35,0x2C,0x31,0x39,0x39,0x34,0x00,0xFF,0x1A,0x05
-    db 0x01,0x23,0x00,0x02,0x03,0x1B,0x14,0xE0,0x81,0x9D,0x11,0x55,0x1E,0xFC,0x23,0xAC
-    db 0x61,0x30,0x05,0x09,0x88,0x03,0x03,0x30,0x80,0x0E,0x08,0x1B,0x0A,0x21,0x08,0xAC
-    db 0x61,0x80,0x0E,0x09,0x88,0x03,0x03,0x1B,0x0A,0x22,0x08,0xAC,0x61,0x40,0x0F,0x09
-    db 0x88,0x03,0x03,0x1B,0x0A,0x23,0x08,0xAC,0x61,0x04,0x06,0x09,0x88,0x03,0x03,0x20
-    db 0x04,0x32,0x00,0x01,0x00,0x21,0x02,0xFF,0x00,0x10,0x05,0x47,0xFF,0xB9,0x00,0xC9
-    db 0x14,0x00,0xFF,0xC3,0x50,0x72,0x6F,0x64,0x75,0x63,0x74,0x69,0x6F,0x6E,0x20,0x44
-    db 0x61,0x74,0x65,0x3A,0xCB,0x07,0x02,0x0D,0x01,0x54,0x69,0x6D,0x65,0x3A,0x14,0x20
-    db 0x30,0x2B,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-    db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 
 cisbuf:                               ; CISLEN dense CIS bytes (trailing BSS)
