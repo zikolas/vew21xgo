@@ -1,0 +1,64 @@
+CF-VEW212 "Sound Card PRO" CIS — captured 2026-07-19, PC110 socket 0,
+via the operator's on-box CISDUMP.EXE (C:\DEV). Card healthy, CIS intact.
+
+Raw tuple stream as dumped:
+
+  TPL 01 len  2: 00 FF                                        (DEVICE: null)
+  TPL 17 len  2: D1 FF                                        (DEVICE_A — same as VEW211)
+  TPL 15 len 46: 04 01 "Panasonic\0Sound Card PRO\0CF-VEW212\0Ver 1.0\0" FF
+                 (display clipped; strings from the tool's decode, and
+                  2+10+15+10+8+1 = 46 checks out exactly)
+  TPL 1A len  5: 01 20 00 02 03
+                 CISTPL_CONFIG: RASZ=2, LAST index 0x20, config regs at
+                 attr 0x0200, TPRC mask 03 = COR + CCSR present
+  TPL 1B len 20: E0 81 9D 11 55 1E FC 23 AC 61 30 05 09 88 03 03 30 80 0E 08
+                 CFTABLE_ENTRY idx 0x20 (default, I/O interface):
+                 Vcc 5V; TWO I/O ranges: 0x0530 len 10 + 0x0388 len 4;
+                 IRQ: level, mask 0x0E80 = {7,9,10,11}
+                 >>> BIT-IDENTICAL to the CF-VEW211's default entry <<<
+  TPL 20 len  4: 32 00 01 05                                  MANFID 0032/0501
+                 (VEW211 = 0032/0001 — same Matsushita MANF, new card ID)
+  TPL 21 len  2: FF 00                                        FUNCID 0xFF (same oddity as the 211)
+  TPL 10 len  5: A1 FF 5F 00 CD                               (checksum tuple)
+  TPL 14 len  0:                                              (NO_LINK)
+  TPL FF (end)
+
+Differences from the CF-VEW211:
+  * MANFID card ID 0x0501 (not 0x0001)
+  * VERS_1 branding: Panasonic / Sound Card PRO / CF-VEW212 / Ver 1.0
+  * ONE config entry only (last index 0x20): no E80/F40/604 alternates
+  * different checksum tuple (naturally)
+Everything else — config reg base 0x200 with COR+CCSR, the default
+codec 0x530 + FM 0x388 layout, the level-only {7,9,10,11} IRQ set, the
+DEVICE_A byte, even the vendor FUNCID 0xFF quirk — matches the VEW211
+byte for byte.  Almost certainly the same MEI ASIC family.
+
+Not yet probed (CIS tells us nothing about): codec type at base+4
+(expect CS4231-family WSS; check I12 chip ID), FM actually fitted
+(declared in the CIS, unlike the fitted-FM-less PC-9801N-J04 whose CIS
+declared no 388 range — good sign), vendor regs 0x204/0x206/0x208 /
+CIS shadow / EEPROM strobe presence.
+
+HARDWARE (the operator, 2026-07-19): the card has an OPL4 (YMF278) MIDI
+WAVETABLE built in, and he believes the YMF262 is ALSO fitted (211
+board + wavetable section is the working theory — the OPL4 contains an
+OPL3 core, so both chips only makes sense if the 262 keeps the 388
+legacy path and the OPL4 serves wave-only duty behind the ASIC).
+
+Where are the wave registers?  The CIS's FM range is still only
+388h x4 (no 38C/38D pair a standard OPL4 mapping would use), but the
+codec range is len 10 again — and on the VEW211, base+8/+9 was the
+hidden vendor bank behind the 0x206=0x38 + 0x208=0x05 combination
+lock (fixed 0xA_ upper nibble at +8, 0xBC at +9, no audible effect =
+plumbing with nothing behind it).  PRIME SUSPECT: on the 212,
+0x538/0x539 (possibly behind the same lock) = OPL4 wave addr/data.
+
+Recon plan (when the box is next available):
+  1. enable (auto-detect: IBMDOSCS is resident on the PC110, so CS
+     mode — which doubles as the /CS backend's first hardware test)
+  2. codec I12 chip ID, opl_detect at 388 (expect OPL3-class)
+  3. OPL4 presence the canonical way: NEW/NEW2 dance via 38A/38B bank
+     1 reg 05, then wave Device ID register 0x02 == 0x20 (YMF278B)
+  4. raw-read base+8/+9 with and without the 206/208 combination lock;
+     if live, try the wave ID through them
+  5. wave ROM presence (YRW801?) via the OPL4 memory interface
