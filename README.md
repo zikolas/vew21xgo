@@ -28,15 +28,22 @@ register set, the Crystal CS4231A datasheet, and the public OPL FM
 programming model. No vendor driver code. Developed and tested on an IBM
 PC110; it should work on Intel 82365-class controllers generally.
 
-## 2.0 — the unified assembly enabler (PCIC / Card Services / OmniBook SS)
+## 2.x — the unified assembly enabler (PCIC / Card Services / OmniBook SS)
 
 `VEW21XGO.ASM` (→ `VEW21XGO.COM`, NASM, ~10 KB) is the successor to the C
 point enabler: the same card knowledge with **three host backends in one
-binary**, on the architecture proven by our ES1688GO:
+binary**, on the architecture proven by our ES1688GO.
+
+Since 2.1 it also enables the **CF-VEW212 "Sound Card PRO"** (MANFID
+`0032/0501`): its single config entry is bit-identical to the 211's
+default, so the codec + OPL3 side just works — but it declares no
+alternate codec bases, so `/IO` other than 530 is overridden with a note.
+(The 212's OPL4 wavetable is a separate recon effort —
+`probes/CIS_VEW212.TXT`.) The backends:
 
 | Mode | Host | Notes |
 |---|---|---|
-| `/PCIC` | Intel 82365-class controllers (PC110, ThinkPad 235) | direct port of 1.4, incl. dead-CIS healing |
+| `/PCIC` | Intel 82365-class controllers (PC110, ThinkPad 235) | direct port of 1.4; dead-CIS cards enabled read-only from built-in config |
 | `/CS` | any PCMCIA Card Services 2.1 stack (SystemSoft tested on the OmniBook 530 lineage) | registers as a CS client and **stays TSR**: hot-plug configures the card on insert, a later run live-reconfigures through the resident copy, `/OFF` releases it |
 | `/OB` | HP OmniBook 300/425/430 ROM Socket Services, no CS needed | polite I/O window allocator (codec > FM degrade), 425-probed SS quirks baked in |
 
@@ -48,10 +55,13 @@ ES1688GO bell "ding" with a proper release, not the sustained organ note),
 and `/I` now also steers the IRQ in CS and OB modes. Everything else
 (`/IO`, `/VOL`, `/SPKR`, `/S`, `/W`, `/OFF`) works as before.
 
-One caveat: **Card Services cannot see a dead-CIS card** (CS reads tuples
-through its own stack, and there is no attribute window to heal through) —
-run `/PCIC` or `/OB` once to heal it, or `VEWCIS /BURN` for the permanent
-repair; after that CS mode identifies the card normally.
+Unlike 1.x, **the 2.x enabler never writes the CIS**: a dead-CIS card is
+still enabled (from the built-in configuration, read-only), but healing
+and repair belong to `VEWCIS`, which since v2.0 takes the card model on
+the command line — a dead card cannot say which model it is. And **Card
+Services cannot see a dead-CIS card at all** (CS reads tuples through its
+own stack), so repair it first (`VEWCIS /211 /BURN` or `/212 /BURN`),
+then use `/CS`.
 
 Build: `./build.sh` on the host, or on-box
 `C:\NASM\NASM -f bin VEW21XGO.ASM -o VEW21XGO.COM`. Note DOS runs `.COM`
@@ -110,18 +120,29 @@ VEW21XGO [/IO=530] [/I=0] [/VOL=4] [/BEEP] [/SPKR] [/S=0..7] [/W=D000] [/OFF]
 mapping, no mixer. Use it when you want a different stack (Card Services,
 EZ-Play, the period vendor drivers) to own the card afterwards:
 
+Since v2.0 VEWCIS repairs **both cards**, and every operation that writes
+the shadow requires the model on the command line (`/211` or `/212`) —
+a dead card cannot say which model it is:
+
 ```
-VEWCIS            volatile heal: inject the CIS shadow, leave the card
-                  powered + un-configured + self-describing
-VEWCIS /BURN      PERMANENT repair: power-cycles to read the true EEPROM
+VEWCIS /211       volatile heal: inject the selected CIS image into the
+  (or /212)       shadow, leave the card powered + un-configured +
+                  self-describing
+VEWCIS /211 /BURN PERMANENT repair: power-cycles to read the true EEPROM
                   state, injects if dead, pulses the ASIC's commit strobe
                   (attr 0x204 bit0), then power-cycles again and verifies
                   the EEPROM reloads the pristine CIS on its own.
                   Refuses to burn a card that is already healthy.
-VEWCIS /RESTORE   like /BURN but unconditional: burns the reference image
-                  even over a valid CIS (undo test images / factory-reset
-                  to the known-good dump)
+VEWCIS /211 /RESTORE   like /BURN but unconditional: burns the selected
+                  reference image even over a valid CIS (undo test
+                  images / factory-reset to the known-good dump)
 ```
+
+The `/212` image is **reconstructed** from a tuple-level dump of a
+healthy CF-VEW212 (`probes/CIS_VEW212.TXT`) — functionally complete and
+self-consistent, but not yet verified byte-exact against a raw EEPROM
+read. Capture one from a healthy unit before trusting a `/212` burn on
+a real casualty.
 
 ## The card
 
