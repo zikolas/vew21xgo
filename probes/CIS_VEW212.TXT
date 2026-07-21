@@ -56,7 +56,7 @@ probes/CIS_VEW212.BIN = the 256 dense bytes as the card presents them
      this capture) before any /212 injection is ever attempted.
 
 HARDWARE (the operator, 2026-07-19): the card has an OPL4 (YMF278) MIDI
-WAVETABLE built in, and he believes the YMF262 is ALSO fitted (211
+WAVETABLE built in, and they believe the YMF262 is ALSO fitted (211
 board + wavetable section is the working theory — the OPL4 contains an
 OPL3 core, so both chips only makes sense if the 262 keeps the 388
 legacy path and the OPL4 serves wave-only duty behind the ASIC).
