@@ -1,3 +1,6 @@
 probes/SINE.WAV
 .DS_Store
 probes/SINE8K.WAV
+# Watcom build artifacts (VEWCIS.EXE is committed on purpose; these aren't)
+*.OBJ
+legacy/VEW21XGO.EXE

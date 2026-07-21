@@ -157,12 +157,14 @@ region that on the 211 was an empty hidden register bank).
 
 ## History: the 1.x C enabler
 
-`VEW21XGO.C` / `VEW21XGO.EXE` (Open Watcom) is the original PCIC-only
-point enabler this project grew from, kept for reference. Its versions
-1.3–1.4 healed a dead CIS automatically on every run; that behavior moved
-to `VEWCIS` when the 2.x assembly enabler took over (an enabler silently
-writing a possibly-wrong identity into a card it cannot actually identify
-stopped being charming once a second card model existed).
+The original PCIC-only point enabler this project grew from lives in
+[`legacy/VEW21XGO.C`](legacy/) (Open Watcom), kept for reference — see
+`legacy/README.md`. Its versions 1.3–1.4 healed a dead CIS automatically
+on every run; that behavior moved to `VEWCIS` when the 2.x assembly
+enabler took over (an enabler silently writing a possibly-wrong identity
+into a card it cannot actually identify stopped being charming once a
+second card model existed). The compiled 1.x `.EXE` is no longer
+committed; build it from the archived source if you want it.
 
 ## Documentation
 
@@ -183,11 +185,13 @@ The unified enabler (NASM, host or on-box):
 ./build.sh       (or: nasm -f bin VEW21XGO.ASM -o VEW21XGO.COM)
 ```
 
-VEWCIS and the legacy C enabler (Open Watcom, 16-bit real mode):
+VEWCIS (Open Watcom, 16-bit real mode):
 
 ```
-BUILD VEWCIS     (BUILD.BAT with no argument builds the legacy VEW21XGO.C)
+BUILD VEWCIS     (or just BUILD — VEWCIS is the default target)
 ```
+
+The legacy 1.x enabler builds the same way from `legacy/VEW21XGO.C`.
 
 ## License
 
