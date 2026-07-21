@@ -26,7 +26,7 @@
  * strobe, then power-cycles again and verifies the EEPROM reloads the
  * pristine image by itself.
  *
- * Usage: VEWCIS [/211 | /212] [/BURN | /RESTORE] [/S=0..7] [/W=D000]
+ * Usage: VEWCIS [/211 | /212] [/BURN | /RESTORE] [/S=0..7] [/W=D000] [/?]
  *   /211      the reference image is the CF-VEW211 dump (byte-exact
  *             capture from our own pristine unit, "Version 1.2" CIS)
  *   /212      the reference image is the CF-VEW212 "Sound Card PRO" dump
@@ -278,6 +278,27 @@ static int sw(const char *a, const char *name, char **val)
     return 0;
 }
 
+static void usage(void)
+{
+    printf(
+    "VEWCIS %s - CIS repair tool for the Panasonic CF-VEW211 / CF-VEW212.\n"
+    "Heals or reprograms the card's CIS shadow/EEPROM; touches nothing else\n"
+    "(no COR write, no I/O mapping, no mixer).\n\n"
+    "Usage: VEWCIS [/211 | /212] [/BURN | /RESTORE] [/S=0..7] [/W=D000]\n\n"
+    "  /211 /212   select the reference CIS image - REQUIRED to write the\n"
+    "              shadow, since a dead card cannot say which model it is\n"
+    "  (no action) volatile heal: inject the image into the shadow and leave\n"
+    "              the card powered + self-describing until the next power-down\n"
+    "  /BURN       PERMANENT repair: program the image into the card's EEPROM\n"
+    "              and verify across a power cycle (skips an already-healthy card)\n"
+    "  /RESTORE    like /BURN but unconditional - overwrite even a valid CIS\n"
+    "  /S=dec      socket 0..7 (default: auto-scan)\n"
+    "  /W=hex      attribute-window segment (default D000, auto-relocates)\n\n"
+    "With no /BURN or /RESTORE the repair is volatile (RAM shadow only).\n"
+    "To actually use the card (codec + FM), enable it with VEW21XGO.\n",
+    VEWCIS_VER);
+}
+
 int main(int argc, char **argv)
 {
     unsigned sock = 0, memseg = 0xD000;
@@ -287,6 +308,7 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         char *arg = argv[i], *vp;
         if (arg[0] != '/' && arg[0] != '-') continue;
+        if (sw(arg, "?", &vp) || sw(arg, "H", &vp) || sw(arg, "HELP", &vp)) { usage(); return 0; }
         if      (sw(arg, "211", &vp)) { ref_img = cis_211; ref_name = "CF-VEW211"; }
         else if (sw(arg, "212", &vp)) { ref_img = cis_212; ref_name = "CF-VEW212"; }
         else if (sw(arg, "BURN", &vp)) burn = 1;

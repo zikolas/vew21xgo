@@ -18,8 +18,10 @@ then an 82365 probe at 3E0h.
 It also still handles its founding case: **a card whose CIS is dead** (a
 failed EEPROM load — the tuple region reads one stuck fill byte, so no
 CIS-matching software can ever identify it). Such a card is recognized by
-its uniform-fill signature and enabled from the built-in configuration,
-**read-only** — and the companion `VEWCIS` tool can repair the CIS
+its uniform-fill signature and reported — but because a blank CIS is *not*
+proof the card is a VEW21x (any card's failed EEPROM reads identically),
+it is only configured under **`/FORCE /S=n`**, from the built-in
+configuration, **read-only**. The companion `VEWCIS` tool repairs the CIS
 permanently, in software (see below).
 
 Clean-room: built from healthy cards' own CIS dumps, the public Intel
@@ -39,11 +41,12 @@ VEW21XGO /T
 ```
 
 With no `/S`, VEW21XGO scans the sockets and configures the first
-CF-VEW211/212 (or dead-CIS card) it finds, tagged `(auto)` in its output.
+CF-VEW211/212 it finds, tagged `(auto)` in its output. (A card with a
+dead/blank CIS is reported but not configured unless you add `/FORCE`.)
 
 ```
 VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
-         [/NOFM] [/S=n] [/W=D000] [/F[ORCE]] [/OFF]
+         [/NOFM] [/S=n] [/W=D000] [/F[ORCE]] [/OFF] [/?]
 
   /IO=hex   codec base — 530 (default) / E80 / F40 / 604 (picks the
             matching COR index; codec registers at base+4, OPL3 always
@@ -64,8 +67,10 @@ VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
             storage cards and are never probed; CS: pin to this socket)
   /W=hex    attribute-window segment for the CIS/COR access (PCIC;
             default D000, auto-relocates if another card is mapped there)
-  /FORCE    configure without the CIS identity check (needs /S)
+  /FORCE    configure without the CIS identity check — also the only way
+            to enable a card whose CIS is dead/blank (needs /S)
   /OFF      PCIC: power the socket down; CS: release + go dormant
+  /?        show this usage (also /H, /HELP)
 ```
 
 Note DOS runs `.COM` before `.EXE`: drop `VEW21XGO.COM` next to the old
@@ -80,7 +85,7 @@ the `.EXE` to avoid confusion).
 | ✅ | **Both cards** — CF-VEW211 and CF-VEW212 "Sound Card PRO", matched by MANFID |
 | ✅ | **OPL3 FM synthesis** at the standard AdLib port `0x388` — games just work |
 | ✅ | **WSS codec** (CS4231A) at `0x530` (211 also: `0xE80` / `0xF40` / `0x604`) |
-| ✅ | **Dead-CIS cards enabled anyway** — recognized by their fill signature, configured from built-in knowledge, read-only |
+| ✅ | **Dead-CIS cards recognized** — flagged by their fill signature; configured from built-in knowledge only under `/FORCE`, never written to |
 | ✅ | **PCM volume** (`/VOL`) — DAC attenuation in 1.5 dB steps |
 | ✅ | **Mixer un-mute** — the codec powers up silent; write-verified, retried ms-paced (cold-codec quirk) |
 | ✅ | **Host-speaker audio** (`/SPKR`) — via the PCMCIA #SPKR pin (1-bit, lo-fi by nature) |
@@ -109,6 +114,7 @@ VEWCIS /211 /BURN      PERMANENT repair: power-cycles to read the true
 VEWCIS /211 /RESTORE   like /BURN but unconditional: burns the selected
                        reference image even over a valid CIS (undo test
                        images / factory-reset to the known-good dump)
+VEWCIS /?              show usage (also /H, /HELP)
 ```
 
 The 211 unit this project was written for was successfully repaired

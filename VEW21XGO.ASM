@@ -39,13 +39,15 @@
 ;
 ;  DEAD-CIS CARDS: the ASIC shadows the CIS in RAM loaded from a 93LC56
 ;  EEPROM; when that load fails the whole tuple region reads one stuck
-;  fill byte.  In PCIC and OB modes (which read attribute space
-;  themselves) such a card is still ENABLED from the built-in
-;  configuration - READ-ONLY: this enabler never writes the CIS shadow.
-;  Repair belongs to the standalone VEWCIS tool, which takes the card
-;  model on the command line (/211 or /212 - a dead card cannot say
-;  which it is; /BURN makes it permanent).  Card Services cannot see a
-;  dead-CIS card at all: repair it first, then use /CS.
+;  fill byte.  A blank/dead CIS is NOT proof the card is a VEW21x - any
+;  card's failed EEPROM reads the same - so this enabler will NOT
+;  configure a dead-CIS card on its own; it is reported, and enabled
+;  only under /FORCE /S=n (from the built-in config, still READ-ONLY:
+;  the enabler never writes the CIS shadow).  Repair belongs to the
+;  standalone VEWCIS tool, which takes the card model on the command
+;  line (/211 or /212 - a dead card cannot say which it is; /BURN makes
+;  it permanent).  Card Services cannot see a dead-CIS card at all:
+;  repair it first, then use /CS.
 ;
 ;  Usage:
 ;    VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
@@ -65,7 +67,8 @@
 ;    /NOFM     don't claim the 388h FM window
 ;    /S=dec    socket (PCIC 0-7, OB 1-2, CS: probe only this socket)
 ;    /W=hex    attr-window segment for the CIS/COR access (PCIC; def D000)
-;    /FORCE    configure without the CIS identity check (needs /S)
+;    /FORCE    configure without the CIS identity check - also the only
+;              way to enable a card whose CIS is dead/blank (needs /S)
 ;    /OFF      PCIC: power the socket down; CS: release + go dormant
 ;
 ;  Build (host or on-box):  nasm -f bin VEW21XGO.ASM -o VEW21XGO.COM
@@ -260,11 +263,11 @@ P_RIRQ_LEN equ 5
 
 ;==========================================================================
 ;  KNOWN-CARD MANIFEST (resident: the CS hot-plug path identifies too).
-;  Dead-CIS units are claimed separately by their uniform-fill signature
-;  in the PCIC/OB probe paths and enabled from the built-in default
-;  config, READ-ONLY (both cards share it bit-for-bit).  A dead card
-;  cannot say which model it is, so CIS repair lives in VEWCIS, which
-;  takes the model on the command line.
+;  A dead-CIS unit (uniform-fill signature) is NOT auto-claimed - a
+;  blank CIS is not proof of model - and is only enabled under /FORCE
+;  /S=n, from the built-in default config (both cards share it
+;  bit-for-bit), READ-ONLY.  CIS repair lives in VEWCIS, which takes the
+;  model on the command line.
 ;
 ;  K_FIX530: the card decodes ONLY COR index 20h / codec base 530h (the
 ;  212 declares no alternates) - a different /IO is overridden, noted in
@@ -1678,6 +1681,12 @@ ob_got:
 
 ; ---------- failure reporting --------------------------------------------
 ob_failx:                             ; /S given; [failwhy] says what
+        cmp  byte [sawdead], 0
+        je   .fdead
+        mov  si, m_deadcis
+        call prstr
+        int  20h
+.fdead:
         cmp  byte [failwhy], FW_UNKNOWN
         je   .unk
         cmp  byte [failwhy], FW_DRIVE
@@ -1710,6 +1719,12 @@ ob_failx:                             ; /S given; [failwhy] says what
         int  20h
 
 ob_fails:
+        cmp  byte [sawdead], 0
+        je   .sdead
+        mov  si, m_deadcis
+        call prstr
+        int  20h
+.sdead:
         cmp  byte [sawunk], 0
         jne  .seen
         mov  si, m_noknown
@@ -1812,12 +1827,19 @@ ob_try:
         call cis_parse                ; CF ignored: defaults hold
         call cis_deadchk
         jnc  .ident
-        mov  byte [cis_state], 2      ; dead wall: enable from the built-in
-        mov  word [cfgbase], VEW_COR  ; config, READ-ONLY - repair is
-        mov  word [k_name], n_dead    ; VEWCIS's job, never ours
+        mov  byte [cis_state], 2      ; dead-fill CIS: a uniform fill is NOT
+        cmp  byte [o_force], 0        ; proof this is a VEW21x (ANY card's
+        je   .deadno                  ; blank EEPROM reads the same), so only
+        mov  word [cfgbase], VEW_COR  ; enable it (from built-in config)
+        mov  word [k_name], n_dead    ; under /FORCE
         mov  byte [k_flags], 0
         mov  byte [matched], 0
         jmp  .ok
+.deadno:
+        mov  byte [sawdead], 1        ; note it; never auto-claim a dead card
+        call ob_restw0
+        stc
+        ret
 .ident:
         call identify
         jnc  .ok
@@ -2157,6 +2179,12 @@ pc_mode:
         call prstr
         int  20h
 .norc:
+        cmp  byte [sawdead], 0
+        je   .norc2
+        mov  si, m_deadcis
+        call prstr
+        int  20h
+.norc2:
         mov  si, m_socket
         call prstr
         mov  al, [sock]
@@ -2193,6 +2221,12 @@ pc_mode:
         call prstr
         int  20h
 .noknown:
+        cmp  byte [sawdead], 0
+        je   .noknown2
+        mov  si, m_deadcis
+        call prstr
+        int  20h
+.noknown2:
         mov  si, m_noknown2
         call prstr
         int  20h
@@ -2535,12 +2569,17 @@ pc_probe:
         call cis_parse                ; CF ignored: cfgbase stays 200h
         call cis_deadchk
         jnc  .ident
-        mov  byte [cis_state], 2      ; dead wall: enable from the built-in
-        mov  word [cfgbase], VEW_COR  ; config, READ-ONLY - repair is
-        mov  word [k_name], n_dead    ; VEWCIS's job, never ours
+        mov  byte [cis_state], 2      ; dead-fill CIS: a uniform fill is NOT
+        cmp  byte [o_force], 0        ; proof this is a VEW21x (ANY card's
+        je   .deadno                  ; blank EEPROM reads the same), so only
+        mov  word [cfgbase], VEW_COR  ; enable it (from built-in config)
+        mov  word [k_name], n_dead    ; under /FORCE
         mov  byte [k_flags], 0
         mov  byte [matched], 0
         jmp  .ours
+.deadno:
+        mov  byte [sawdead], 1        ; note it; never auto-claim a dead card
+        jmp  .undo
 .ident:
         call identify
         jnc  .ours
@@ -3138,6 +3177,8 @@ parse_args:
         ret
 .sw:
         lodsb
+        cmp  al, '?'                  ; /? = help (before the upper-case fold,
+        je   .help                    ; since '?' & DFh would mangle it)
         and  al, 0DFh
         cmp  al, 'P'
         je   .p
@@ -3159,7 +3200,11 @@ parse_args:
         je   .f
         cmp  al, 'W'
         je   .w
+        cmp  al, 'H'                  ; /H, /HELP
+        je   .help
         jmp  .unknown
+.help:
+        jmp  showhelp
 .p:                                   ; /PCIC
         call swtail
         mov  byte [o_mode], MODE_PCIC
@@ -3496,10 +3541,33 @@ errout:                               ; SI = message; print + exit
         call prstr
         int  20h
 
+showhelp:                             ; /? or /H : print usage and exit
+        mov  si, m_help
+        call prstr
+        int  20h
+
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
 m_banner:  db 'VEW21XGO 2.1 - Panasonic CF-VEW211/212 unified enabler (PCIC/CS/OB)',13,10,0
+m_help:
+ db 'Enables the Panasonic CF-VEW211 / CF-VEW212 PC Card sound cards with no',13,10
+ db 'Card Services needed (CS4231A WSS codec + OPL3 FM; 212 adds an OPL4).',13,10,13,10
+ db 'Usage: VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T] [/SPKR]',13,10
+ db '                [/NOFM] [/S=n] [/W=D000] [/FORCE] [/OFF]',13,10,13,10
+ db '  (no mode)  auto-detect host: Card Services, then OmniBook SS, then PCIC',13,10
+ db '  /PCIC /CS /OB  force the host backend',13,10
+ db '  /IO=hex    codec base 530(def)/E80/F40/604 (212 is 530-only); OPL3=388',13,10
+ db '  /I=dec     IRQ 7/9/10/11 (level-mode card; default 0 = none)',13,10
+ db '  /VOL=dec   DAC attenuation, 1.5 dB/step, 0..63 (default 24 = -36 dB)',13,10
+ db '  /T         play a short FM test tone after enabling',13,10
+ db '  /SPKR      also route audio to the host speaker (#SPKR pin; mono, harsh)',13,10
+ db '  /NOFM      do not claim the 388h FM window',13,10
+ db '  /S=dec     socket (PCIC 0-7, OB 1-2; CS: probe only this socket)',13,10
+ db '  /W=hex     attribute-window segment for CIS/COR access (PCIC; def D000)',13,10
+ db '  /FORCE     configure without the CIS check; REQUIRED for a dead-CIS card',13,10
+ db '  /OFF       PCIC: power the socket down;  CS: release + go dormant',13,10,13,10
+ db 'Repair a dead/blank CIS with the companion tool: VEWCIS /211 or /212.',13,10,0
 m_hostcs:  db 'Host: PCMCIA Card Services',13,10,0
 m_hostob:  db 'Host: Socket Services (OmniBook)',13,10,0
 m_hostpc:  db 'Host: 82365-class PCIC (direct)',13,10,0
@@ -3554,6 +3622,9 @@ m_unrec:   db ': unrecognized card - ',0
 m_addman:  db '  Use /F to force, if you are sure.',13,10,0
 m_addman2: db '  Use /F /S=n to force, if you are sure.',13,10,0
 m_addman3: db '  Use /FORCE to force, if you are sure.',13,10,0
+m_deadcis: db 'A card with a DEAD/blank CIS is present. If you are sure it is'
+           db ' a',13,10,'  CF-VEW211/212, enable it with /FORCE /S=n - or'
+           db ' repair the CIS with',13,10,'  VEWCIS /211|/212.',13,10,0
 m_noknown: db 'No CF-VEW211/212 (or dead-CIS card) in any socket.',13,10,0
 m_noknown2: db 'No CF-VEW211/212 (or dead-CIS card) found in any socket.',13,10,0
 m_nomatch: db 'Not a CF-VEW211/212 (last seen ',0
@@ -3615,6 +3686,7 @@ o_wseg:    dw 0D000h                  ; attr probe window segment
 o_wgiven:  db 0
 sock:      db 0                       ; current socket (OB/PCIC)
 sawunk:    db 0
+sawdead:   db 0                       ; saw a dead-CIS card but /FORCE absent
 failwhy:   db 0
 gotcfg:    db 0
 cisfill:   db 0                       ; dead-CIS stuck fill value
