@@ -117,13 +117,35 @@ VEWCIS /211 /RESTORE   like /BURN but unconditional: burns the selected
 VEWCIS /?              show usage (also /H, /HELP)
 ```
 
+> ⚠️ **`/BURN` and `/RESTORE` write binding, permanent changes to the
+> card's on-card EEPROM** — not the volatile RAM shadow. They are only
+> reversible if you hold a correct byte-exact CIS image for *that exact
+> card*. There is no undo.
+>
+> **This is not CF-VEW211/212-specific.** The EEPROM commit strobe (attr
+> `0x204`) is a feature of the card's **MEI DA65646 ASIC**, and other
+> cards built on that same ASIC respond to it identically — for example
+> the NEC **PC-9801N-J04** sound card (same MEI ASIC + CS4231A, different
+> identity and config). VEWCIS recognises a *healthy* card by its MANFID,
+> but a card whose CIS is **dead reads as a uniform fill no matter what
+> card it is** — so a `/BURN` or `/RESTORE` aimed at a dead card you have
+> **not independently confirmed to be a CF-VEW211/212** can permanently
+> stamp a *different* MEI-ASIC card with a VEW211/212 identity.
+>
+> Before burning: be sure the card is a CF-VEW211/212. If in any doubt,
+> **capture its current CIS first** (a raw attribute-memory dump) and keep
+> it, and prefer the **volatile heal** (`/211` or `/212` with no `/BURN`)
+> — that leaves the EEPROM untouched and evaporates on power-down.
+
 The 211 unit this project was written for was successfully repaired
 exactly that way (the first time by accident — long story, documented in
 `doc/ASIC.md`).
 
 Both reference images are **byte-exact captures from healthy units**
-(`probes/CIS_GOOD.BIN`, `probes/CIS_VEW212.BIN`). A 212 quirk the image
-deliberately preserves: its CIS shadow is 128 dense bytes *mirrored* —
+(`probes/CIS_211_PRISTINE.BIN`, `probes/CIS_VEW212.BIN`; the older
+third-party 211 dump is kept as `probes/CIS_GOOD.BIN` for history). A 212
+quirk the image deliberately preserves: its CIS shadow is 128 dense bytes
+*mirrored* —
 the card presents bytes 128–255 as a repeat of 0–127 — so the embedded
 image carries the mirror, making injection alias-safe even if writes
 alias the same way (`probes/CIS_VEW212.TXT` has the full story).

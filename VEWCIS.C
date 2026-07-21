@@ -17,6 +17,18 @@
  * it enables dead-CIS cards read-only from built-in config, and repair
  * lives here, on purpose.)
  *
+ * *** WARNING - /BURN and /RESTORE write BINDING, PERMANENT changes to the
+ * card's on-card EEPROM (not the volatile shadow); there is no undo but a
+ * correct byte-exact image for that exact card.  The commit strobe (attr
+ * 0x204) is a MEI DA65646 ASIC feature, NOT CF-VEW211/212-specific: other
+ * cards on the same ASIC respond identically (e.g. the NEC PC-9801N-J04,
+ * same ASIC + CS4231A, different identity).  A healthy card is matched by
+ * MANFID, but a DEAD card of ANY MEI-ASIC type reads as the same uniform
+ * fill - so /BURN|/RESTORE on a dead card not independently confirmed to
+ * be a CF-VEW211/212 can permanently stamp a different card with a
+ * VEW211/212 identity.  Confirm the card, capture its current CIS first if
+ * unsure, and prefer the volatile heal (no /BURN) when experimenting. ***
+ *
  * /BURN makes the repair PERMANENT. The MEI ASIC's config register at
  * attribute 0x204 (undeclared in the CIS) is a whole-shadow EEPROM commit
  * strobe: pulsing bit0 writes the entire 256-byte shadow back to the
