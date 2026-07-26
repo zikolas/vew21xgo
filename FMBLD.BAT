@@ -1,6 +1,8 @@
 @echo off
 rem Build FMVOL.DLL - the Jemm loadable module that quietens the FM.
-rem Run this in C:\VEW21XGO (JLM.INC must be alongside FMVOL.ASM).
+rem Run this in C:\VEW21XGO. JLM.INC must be alongside FMVOL.ASM; it is
+rem not shipped here - take it from the Jemm package (same release as
+rem JEMM386.EXE/JLOAD.EXE): https://github.com/Baron-von-Riedesel/Jemm
 set WATCOM=C:\WATCOM
 set INCLUDE=C:\WATCOM\H
 set PATH=C:\WATCOM\BINW;C:\DOS

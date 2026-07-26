@@ -192,6 +192,16 @@ CPU mode. This is the approach the vendor's Windows driver effectively
 took, and it is the reason their slider worked where the hardware had
 nothing to offer.
 
+## What you need, and where it comes from
+
+None of the third-party pieces are shipped in this repository — fetch
+them from their own projects, under their own licences:
+
+| Component | Where | Notes |
+|---|---|---|
+| `JEMM386.EXE`, `JLOAD.EXE`, `JLM.INC` | [Jemm](https://github.com/Baron-von-Riedesel/Jemm) | v5.84+. All parts **must come from the same release** — mixed generations refuse to load or hang. `JLM.INC` is only needed to *build* the module. |
+| `HDPMI32I.EXE` | [HX](https://github.com/Baron-von-Riedesel/HX) (`HXRT*.zip`) | v3.21+, and it must be the **"i"** variant — older builds fail with "Failed installing IO port trap for protected-mode". Only needed for the protected-mode work. |
+
 ## Building
 
 The DLL is portable — a target machine needs only `JEMM386.EXE` and
@@ -218,5 +228,11 @@ interface follow Jemm's documented `JLM.INC`; the OPL2/OPL3 register
 model is the public Yamaha programming model; the module is patterned on
 our own `CDXMIR` JLM from the CD-20X work. No vendor driver code was read
 or disassembled.
+
+Interfaces are used for interoperability only. Nothing here is derived
+from the GPL-licensed SBEMU or vsbhda sources, which solve a related
+problem with the same host software — this is our own implementation
+against the same published interfaces, so that the MIT terms above are
+accurate.
 
 MIT — see [LICENSE](../LICENSE).
