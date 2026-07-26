@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.1 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.2 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -94,7 +94,7 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0201h
+VGVER   equ 0202h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
 VBMAX   equ 80h                       ; VERS_1 capture buffer size.  The
@@ -3671,7 +3671,7 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.1 - CF-VEW211/212 enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.2 - CF-VEW211/212 enabler (PCIC/CS/OB)',13,10,0
 m_help:
  db 'Enables the Panasonic CF-VEW211 / CF-VEW212 PC Card sound cards with no',13,10
  db 'Card Services needed (CS4231A WSS codec + OPL3 FM; 212 adds an OPL4).',13,10,13,10
