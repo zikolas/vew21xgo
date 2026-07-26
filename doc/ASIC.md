@@ -94,6 +94,29 @@ there under both the period vendor driver and VEW21XGO — unit-independent,
 by design, not a fault of the repaired specimen. The Windows-era "FM volume"
 slider (observed working on Win98) is driver-side TL scaling.
 
+## The output stage rings after a loud tone (2026-07-26)
+
+Playing the enabler's test tone leaves an audible tail for a couple of
+seconds, and on a freshly powered card the first tone is inaudible and
+arrives later as a pop. Both are the **analogue output stage**, not
+anything programmable, established by elimination:
+
+* enabling the card without playing anything is **silent** — so it is not
+  the COR write, the window mapping or the codec init;
+* after the tone, every one of the 22 operators is set to Total Level 63
+  (maximum attenuation) and every channel keyed off — the chip is then
+  incapable of producing sound, and **the tail continues anyway**;
+* with the codec DAC at -94.5 dB the ding is still heard at full volume
+  (confirming again that FM bypasses the codec) and **the tail is
+  unchanged** — so it is not the codec path either;
+* it happens at both the normal pitch and two octaves down, so it is not
+  a narrow resonance.
+
+That leaves the summing/output stage the YAC512 feeds, after everything
+software can reach. The enabler waits ~2 s before a test tone on a card
+it has just powered, which is the only part of this that software can
+help with; the tail itself is a characteristic of the card.
+
 ## The accidental EEPROM repair (2026-07-10)
 
 After the VEWVND bit sweeps, the card began **loading a valid CIS from the
