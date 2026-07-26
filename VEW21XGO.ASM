@@ -1039,7 +1039,8 @@ fm_tone:
         push ax
         push cx
         push si
-        mov  si, tonetab
+        call fm_hush                  ; start from silence, whatever the
+        mov  si, tonetab              ; chip was left doing before us
         mov  cx, (tonetab_end - tonetab) / 2
 .l:     lodsw                         ; AL = reg, AH = value
         call opl_wr
@@ -1049,8 +1050,34 @@ fm_tone:
         mov  al, 0B0h
         mov  ah, 12h                  ; key off; release 7 rings out
         call opl_wr
+        mov  ax, 400                  ; let the release finish...
+        call ms_delay
+        call fm_hush                  ; ...then leave the chip silent
         pop  si
         pop  cx
+        pop  ax
+        ret
+
+; ---- fm_hush: key every channel off and switch the rhythm section off,
+;      so nothing is left sounding.  A tone that outlives the ding means
+;      some channel was still keyed on - ours or someone else's. --------
+fm_hush:
+        push ax
+        push bx
+        push cx
+        mov  bl, 0B0h                 ; B0h..B8h: key-on lives in bit 5
+        mov  cx, 9
+.h:
+        mov  al, bl
+        xor  ah, ah                   ; key off, block 0
+        call opl_wr                   ; (opl_wr eats AL, so keep it in BL)
+        inc  bl
+        loop .h
+        mov  al, 0BDh                 ; rhythm mode off, no drums
+        xor  ah, ah
+        call opl_wr
+        pop  cx
+        pop  bx
         pop  ax
         ret
 
