@@ -24,6 +24,14 @@ it is only configured under **`/FORCE /S=n`**, from the built-in
 configuration, **read-only**. The companion `VEWCIS` tool repairs the CIS
 permanently, in software (see below).
 
+Three tools ship here, each doing one job:
+
+| | |
+|---|---|
+| **`VEW21XGO`** | brings the card up — this is the one you need |
+| **`VEWCIS`** | repairs a card whose CIS EEPROM has failed, permanently and in software |
+| **`FMVOL`** | gives the FM synth the volume control the hardware does not have |
+
 Clean-room: built from healthy cards' own CIS dumps, the public Intel
 82365SL register set, the PCMCIA CS/SS specs (RBIL + the SystemSoft
 CardSoft technical guide), live-probed OmniBook Socket Services behavior,
@@ -57,8 +65,9 @@ VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
   /VOL=dec  DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
             card's output amp) .. 63; default 24 = -36 dB by ear
             (line-out users into amplified speakers may prefer /VOL=8)
-  /TONE     play a ~1 s FM test tone after enabling (a quiet bell ding —
-            deliberately, because FM has no hardware volume on this card)
+  /TONE     play a short FM test tone after enabling (a quiet bell ding —
+            deliberately so, since the card's FM has no hardware volume;
+            see FMVOL below if you want one)
   /SPKR     also route the card's audio to the host's internal speaker
             (CCSR Audio bit -> #SPKR pin; PCIC mode adds the bridge-side
             route; mono, 1-bit, harsh by nature)
@@ -152,6 +161,49 @@ the card presents bytes 128–255 as a repeat of 0–127 — so the embedded
 image carries the mirror, making injection alias-safe even if writes
 alias the same way (`probes/CIS_VEW212.TXT` has the full story).
 
+## FMVOL — FM volume for a card that has none
+
+The card's FM synth is **deafening, and has no volume control at all**.
+The OPL3 feeds a YAC512 DAC that is summed into the output amp *after*
+the codec, so no mixer register can reach it — and neither chip has an
+attenuator. That is design rather than a fault: a second healthy card and
+Panasonic's own driver are equally loud, and an exhaustive hunt through
+every vendor register, the hidden bank, the codec's XCTL pins and all the
+I/O ports turned up nothing (`doc/ASIC.md`).
+
+`FMVOL.DLL` supplies one anyway, from the other side. Loaded into
+JEMM386, it traps the OPL ports and rescales every **Total Level** write
+bound for a *carrier* operator before it reaches the chip. Modulator
+writes pass through untouched — attenuating a modulator changes the
+*timbre*, not the volume — so games sound exactly as they should, just
+quieter, by a number you choose.
+
+```
+FMGO                  enable the card, load JEMM386, trap at 16 steps
+FMGO 32               ... at 32 steps instead
+
+JLOAD FMVOL.DLL 24    load it directly, 24 steps
+JLOAD -u FMVOL.DLL    unload; the card goes back to its own levels
+```
+
+Attenuation is `0`–`63` in steps of 0.75 dB — **8 ≈ −6 dB, 16 ≈ −12 dB,
+32 ≈ −24 dB**. `0` traps without scaling, which makes a clean A/B. There
+is no live control: changing the level means unload and load again.
+
+> ⚠️ **Real-mode games only.** A Jemm loadable module traps V86 and
+> real-mode guests. Games running under a DOS extender — DOS/4GW,
+> DOS32A, PMODE/W — execute in protected mode and bypass the trap
+> entirely, so FMVOL will appear to do nothing. If the game prints an
+> extender banner as it starts, it is out of reach. Monkey Island,
+> Wolfenstein 3D, Commander Keen and the Sierra titles are all fine;
+> DOOM, Duke Nukem 3D and Descent are not.
+
+Needs `JEMM386.EXE` and `JLOAD.EXE` from the
+[Jemm package](https://github.com/Baron-von-Riedesel/Jemm), which are not
+shipped here. The full story — the carrier rules, what was verified by
+ear, and the route to catching protected-mode games too — is in
+[`doc/FMVOL.md`](doc/FMVOL.md).
+
 ## The cards
 
 | Card | MANFID | Config index | Codec base | FM |
@@ -219,6 +271,17 @@ BUILD VEWCIS     (or just BUILD — VEWCIS is the default target)
 ```
 
 The legacy 1.x enabler builds the same way from `legacy/VEW21XGO.C`.
+
+FMVOL, the Jemm module (JWasm + Open Watcom `wlink`):
+
+```
+./fmbuild.sh     on the host — needs no DOS box at all
+FMBLD.BAT        on a DOS box — needs JWASMD, and JLM.INC from the Jemm package
+```
+
+Either way the signature is patched from `PE` to `PX` afterwards, which
+is what JLOAD accepts. Build it *before* loading JEMM386: JWASMD wants a
+DPMI host and cannot get one once JEMM is resident.
 
 ## License
 
