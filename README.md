@@ -70,6 +70,7 @@ VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
   /FORCE    configure without the CIS identity check — also the only way
             to enable a card whose CIS is dead/blank (needs /S)
   /OFF      PCIC: power the socket down; CS: release + go dormant
+  /V        show the working detail: CIS strings, COR, codec ID, mixer
   /?        show this usage (also /H, /HELP)
 ```
 
@@ -90,6 +91,7 @@ the `.EXE` to avoid confusion).
 | ✅ | **Mixer un-mute** — the codec powers up silent; write-verified, retried ms-paced (cold-codec quirk) |
 | ✅ | **Host-speaker audio** (`/SPKR`) — via the PCMCIA #SPKR pin (1-bit, lo-fi by nature) |
 | ✅ | **FM test tone** (`/T`) — instant audible proof the card is alive |
+| ✅ | **FM volume** — the card has none in hardware; `FMVOL` supplies it by rescaling OPL levels in flight (see [`doc/FMVOL.md`](doc/FMVOL.md)) |
 | ✅ | **Permanent CIS repair** — `VEWCIS /211|/212 /BURN` programs a known-good CIS back into the card's EEPROM |
 
 ## VEWCIS — the standalone CIS repair tool
@@ -190,6 +192,9 @@ committed; build it from the archived source if you want it.
 
 ## Documentation
 
+* [`doc/FMVOL.md`](doc/FMVOL.md) — **FM volume**: why the card has no
+  hardware control over its FM synth, and the port-trapping module that
+  gives it one anyway.
 * `doc/ASIC.md` — full software-visible map of the 211's MEI DA65646 ASIC
   (address decode, CIS shadow behaviour, config registers including three
   undeclared vendor registers — one of which is the **EEPROM commit

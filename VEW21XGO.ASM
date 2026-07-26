@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.1 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.2 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -94,10 +94,13 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0201h
+VGVER   equ 0202h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
-VBMAX   equ 40h                       ; VERS_1 capture buffer size
+VBMAX   equ 80h                       ; VERS_1 capture buffer size.  The
+                                      ; 211's four strings total ~83 bytes;
+                                      ; 64 truncated them and lost the
+                                      ; revision, the one field worth having
 CISLEN  equ 256                       ; dense CIS bytes pulled per probe
 
 PCIC_BASE equ 3E0h
@@ -1039,6 +1042,18 @@ fm_tone:
         push ax
         push cx
         push si
+        call fm_hush                  ; start from silence, whatever the
+                                      ; chip was left doing before us
+        ; The FM sums into the output amp after the codec, and that stage
+        ; needs a moment to bias up after the socket is powered - play too
+        ; soon and the ding is inaudible, arriving later as a pop.  Only
+        ; wait when we powered the card ourselves; a re-run is instant.
+        cmp  byte [pwrsettle], 0
+        je   .ready
+        mov  ax, 2000
+        call ms_delay
+        mov  byte [pwrsettle], 0      ; the stage is up now; don't wait again
+.ready:
         mov  si, tonetab
         mov  cx, (tonetab_end - tonetab) / 2
 .l:     lodsw                         ; AL = reg, AH = value
@@ -1049,8 +1064,50 @@ fm_tone:
         mov  al, 0B0h
         mov  ah, 12h                  ; key off; release 7 rings out
         call opl_wr
+        mov  ax, 400                  ; let the release finish...
+        call ms_delay
+        call fm_hush                  ; ...then leave the chip silent
         pop  si
         pop  cx
+        pop  ax
+        ret
+
+; ---- fm_hush: key every channel off and switch the rhythm section off,
+;      so nothing is left sounding.  A tone that outlives the ding means
+;      some channel was still keyed on - ours or someone else's. --------
+fm_hush:
+        push ax
+        push bx
+        push cx
+        mov  bl, 80h                  ; 80h..95h: sustain 0, release 15 -
+        mov  cx, 22                   ; any note still fading dies at once
+.r:
+        mov  al, bl
+        mov  ah, 0Fh
+        call opl_wr                   ; (opl_wr eats AL, so keep it in BL)
+        inc  bl
+        loop .r
+        mov  bl, 0B0h                 ; B0h..B8h: key-on lives in bit 5
+        mov  cx, 9
+.h:
+        mov  al, bl
+        xor  ah, ah                   ; key off, block 0
+        call opl_wr
+        inc  bl
+        loop .h
+        mov  bl, 40h                  ; 40h..55h: full attenuation.  This is
+        mov  cx, 22                   ; what actually silences the chip - a
+.t:                                   ; key-off merely starts the release,
+        mov  al, bl                   ; which is the "hangover" you hear.
+        mov  ah, 3Fh
+        call opl_wr
+        inc  bl
+        loop .t
+        mov  al, 0BDh                 ; rhythm mode off, no drums
+        xor  ah, ah
+        call opl_wr
+        pop  cx
+        pop  bx
         pop  ax
         ret
 
@@ -2456,6 +2513,9 @@ pc_probe:
         call pc_rd
         and  al, 40h                  ; power already up = a running card
         mov  [p_wason], al
+        jz   .needsettle              ; already running: the analogue side
+        mov  byte [pwrsettle], 0      ; is long since biased up
+.needsettle:
         mov  al, 03h                  ; save the regs we borrow
         call pc_rd
         mov  [p_s03], al
@@ -2925,6 +2985,46 @@ cis_parse:
         pop  ax
         ret
 
+; pr_verslines: print each VERS_1 field on a line of its own.  Joined on
+; one line the 211's four strings are 84 characters and wrap.
+pr_verslines:
+        push ax
+        push bx
+        push si
+        xor  bx, bx
+.next:
+        cmp  bx, [verslen]
+        jae  .done
+        mov  al, [versbuf+bx]
+        or   al, al
+        jz   .adv                     ; skip the separators
+        cmp  al, 0FFh
+        je   .done
+        mov  si, m_versind            ; a field starts here
+        call prstr
+.ch:
+        cmp  bx, [verslen]
+        jae  .eol
+        mov  al, [versbuf+bx]
+        or   al, al
+        jz   .eol
+        cmp  al, 0FFh
+        je   .eol
+        call prchar
+        inc  bx
+        jmp  .ch
+.eol:
+        call crlf
+        jmp  .next
+.adv:
+        inc  bx
+        jmp  .next
+.done:
+        pop  si
+        pop  bx
+        pop  ax
+        ret
+
 ; pr_vers: print the captured VERS_1 strings, space-separated (max 4)
 pr_vers:
         push ax
@@ -2995,10 +3095,9 @@ report:
         call crlf
         jmp  .cisdone
 .cnorm:
+        cmp  byte [o_verb], 0         ; a healthy CIS says nothing by
+        je   .cisdone                 ; default - the card name covers it
         mov  si, m_cis
-        call prstr
-        call pr_vers
-        mov  si, m_manf1
         call prstr
         mov  ax, [manfid]
         call prhex4
@@ -3006,11 +3105,20 @@ report:
         call prchar
         mov  ax, [manfid+2]
         call prhex4
-        mov  al, ')'
-        call prchar
+        call crlf                     ; (the revision is the last VERS_1
+                                      ;  field, printed below - no need to
+                                      ;  say it twice)
+        mov  si, m_cisfull            ; one field per line: joined, the
+        call prstr                    ; 211's strings run to 84 columns
         call crlf
+        call pr_verslines
 .cisdone:
-; line 3: "   COR @ 200h index 20[ (verified | MISMATCH: readback xx)]"
+; COR detail: verbose, or whenever the readback disagrees
+        cmp  byte [o_verb], 0
+        jne  .corshow
+        cmp  byte [r_corvf], 2        ; a mismatch is always worth saying
+        jne  .cordone
+.corshow:
         mov  si, m_corat
         call prstr
         mov  ax, [cfgbase]
@@ -3035,22 +3143,29 @@ report:
         call prchar
 .cornl:
         call crlf
-; line 4: "   WSS codec 534 (responding, ID 8A)  FM 388 OPL3  IRQ 7"
+.cordone:
+; "   WSS 534   FM 388 OPL3   IRQ 7"
         mov  si, m_codec
         call prstr
         mov  ax, [o_io]
         add  ax, 4
         call prhex3
-        mov  si, m_resp
-        cmp  byte [r_codec], 0
-        jne  .cr
+        cmp  byte [r_codec], 0        ; a silent codec always gets said
+        jne  .cq
         mov  si, m_noresp
-.cr:
+        call prstr
+        jmp  .cid
+.cq:
+        cmp  byte [o_verb], 0
+        je   .fmq
+.cid:
+        mov  si, m_cidtag
         call prstr
         mov  al, [r_cid]
         call prhex2
         mov  al, ')'
         call prchar
+.fmq:
         test byte [mapflags], M_FM
         jz   .fmoff
         mov  si, m_fm
@@ -3078,8 +3193,11 @@ report:
         call crlf
         jmp  .irqd
 .noirq:
+        cmp  byte [o_verb], 0
+        je   .irqnl
         mov  si, m_noirq
         call prstr
+.irqnl:
         call crlf
 .irqd:
 ; line 5: "   I/O windows: win4 530-53F, win5 388-38B"
@@ -3120,7 +3238,9 @@ report:
 .w5nl:
         call crlf
 .w5done:
-; line 6: "   mixer: DAC -36.0dB, Aux1/Aux2 muted"
+; mixer detail: verbose only
+        cmp  byte [o_verb], 0
+        je   .mixdone
         mov  si, m_mix
         call prstr
         mov  al, [o_vol]
@@ -3138,6 +3258,7 @@ report:
         call prchar
         mov  si, m_mix2
         call prstr
+.mixdone:
 ; optional notes
         cmp  byte [r_iofix], 0
         je   .nfx
@@ -3149,13 +3270,6 @@ report:
         mov  si, m_spkr
         call prstr
 .nspk:
-        cmp  byte [o_tone], 0
-        je   .nbp
-        cmp  byte [r_oplv], 0
-        je   .nbp
-        mov  si, m_toned
-        call prstr
-.nbp:
         ret
 
 ;==========================================================================
@@ -3277,7 +3391,15 @@ parse_args:
         jz   .loop
         mov  [o_io], dx
         jmp  .loop
-.v:                                   ; /VOL=dec (0 is valid = full level)
+.v:                                   ; /VOL=dec, or /V on its own = verbose
+        mov  al, [si]
+        and  al, 0DFh
+        cmp  al, 'O'
+        je   .vol
+        call swtail
+        mov  byte [o_verb], 1
+        jmp  .loop
+.vol:
         call eat_eq
         mov  al, [si]
         cmp  al, '0'
@@ -3549,7 +3671,7 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.1 - Panasonic CF-VEW211/212 unified enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.2 - CF-VEW211/212 enabler (PCIC/CS/OB)',13,10,0
 m_help:
  db 'Enables the Panasonic CF-VEW211 / CF-VEW212 PC Card sound cards with no',13,10
  db 'Card Services needed (CS4231A WSS codec + OPL3 FM; 212 adds an OPL4).',13,10,13,10
@@ -3588,17 +3710,19 @@ m_sock1:   db ': socket ',0
 m_auto:    db ' (auto)',0
 m_cisdead: db '   CIS: DEAD (stuck ',0
 m_cisdead2: db ' fill) - using built-in config; repair with VEWCIS',0
-m_cis:     db '   CIS: ',0
+m_cis:     db '   CIS ',0
+m_cisfull: db '   VERS_1:',0
+m_versind: db '      ',0
+m_cidtag:  db ' (ID ',0
 m_manf1:   db '  (MANFID ',0
 m_manf2:   db 'MANFID ',0
 m_corat:   db '   COR @ ',0
 m_index:   db ' index ',0
 m_corok:   db ' (verified)',0
 m_cormis:  db ' (MISMATCH: readback ',0
-m_codec:   db '   WSS codec ',0
-m_resp:    db ' (responding, ID ',0
-m_noresp:  db ' (NOT responding, ID ',0
-m_fm:      db '  FM 388 ',0
+m_codec:   db '   WSS ',0
+m_noresp:  db ' (NOT RESPONDING',0
+m_fm:      db '   FM 388 ',0
 m_opl3:    db 'OPL3',0
 m_opl2:    db 'OPL2',0
 m_oplno:   db '(not detected)',0
@@ -3684,9 +3808,12 @@ n_unk:     db 'Unknown card',0
 o_mode:    db 0                       ; 0 = auto-detect
 o_wseg:    dw 0D000h                  ; attr probe window segment
 o_wgiven:  db 0
+o_verb:    db 0                       ; /V: show the working detail
 sock:      db 0                       ; current socket (OB/PCIC)
 sawunk:    db 0
 sawdead:   db 0                       ; saw a dead-CIS card but /FORCE absent
+pwrsettle: db 1                       ; 1 = we powered the card, so the
+                                      ; output stage still needs settling
 failwhy:   db 0
 gotcfg:    db 0
 cisfill:   db 0                       ; dead-CIS stuck fill value
