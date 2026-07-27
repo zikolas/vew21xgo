@@ -1,0 +1,15 @@
+VEW2DUMP - CF-VEW212 live-state snapshot (socket 0)
+pcic 00: 83 7F F1 E9 00 00 E0 22 30 03 33 03 88 03 8D 03
+pcic 10: CC 00 CC 00 34 7F 01 01 E0 00 E0 00 20 7F 70 80
+pcic 20: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08
+pcic 30: 00 00 00 00 00 00 00 00 00 00 B2 00 00 00 00 00
+decoded: IFstat=7F pwr=F1 intctl=E9 (IRQ 9, I/O mode) csc=00 winEn=E0 ioctl=22
+  ioctl bits: win0 8bit+autosz / win1 8bit+autosz
+  io win0 0330-0333 en=1   win1 0388-038D en=1
+attr 200-21E: 66 08 FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+(cis check: 01 02 00 FF)
+io 530+0..9: FF FF FF FF FF FF FF FF FF FF
+io 388-38F  : 00 83 FF 83 FF AC FF FF
+io 331 (MPU stat): BF   (330 not read: would pop a data byte)
+(codec dump skipped - add /CODEC deliberately)
+done.
