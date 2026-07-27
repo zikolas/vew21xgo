@@ -101,7 +101,7 @@ the `.EXE` to avoid confusion).
 | ✅ | **Host-speaker audio** (`/SPKR`) — via the PCMCIA #SPKR pin (1-bit, lo-fi by nature) |
 | ✅ | **FM test tone** (`/T`) — instant audible proof the card is alive |
 | ✅ | **FM volume** — the card has none in hardware; `FMVOL` supplies it by rescaling OPL levels in flight (see [`doc/FMVOL.md`](doc/FMVOL.md)) |
-| ✅ | **Permanent CIS repair** — `VEWCIS /211|/212 /BURN` programs a known-good CIS back into the card's EEPROM |
+| ✅ | **Permanent CIS repair** — `VEWCIS /211 /BURN` programs a known-good CIS back into the card's EEPROM (**211 only** since VEWCIS 2.3 — see below) |
 
 ## VEWCIS — the standalone CIS repair tool
 
@@ -113,7 +113,7 @@ on the command line:
 
 ```
 VEWCIS /211            volatile heal: inject the selected CIS image into
-  (or /212)            the shadow; card left powered, un-configured,
+                       the shadow; card left powered, un-configured,
                        self-describing until next power-down
 VEWCIS /211 /BURN      PERMANENT repair: power-cycles to read the true
                        EEPROM state, injects if dead, pulses the ASIC's
@@ -143,23 +143,29 @@ VEWCIS /?              show usage (also /H, /HELP)
 > **not independently confirmed to be a CF-VEW211/212** can permanently
 > stamp a *different* MEI-ASIC card with a VEW211/212 identity.
 >
-> Before burning: be sure the card is a CF-VEW211/212. If in any doubt,
+> Before burning: be sure the card is a CF-VEW211. If in any doubt,
 > **capture its current CIS first** (a raw attribute-memory dump) and keep
-> it, and prefer the **volatile heal** (`/211` or `/212` with no `/BURN`)
-> — that leaves the EEPROM untouched and evaporates on power-down.
+> it, and prefer the **volatile heal** (`/211` with no `/BURN`) — that
+> leaves the EEPROM untouched and evaporates on power-down.
+>
+> 🚫 **CF-VEW212: all write support was removed in VEWCIS 2.3.** The
+> 212's ASIC is *not* the 211's — its config register file differs (attr
+> `0x204`/`0x206` don't read back at all) and **no commit or erase
+> mechanism has ever been demonstrated on it**, so a "repair" would fire
+> 211 reflexes at unknown registers on a rare card. VEWCIS recognises a
+> healthy 212 by MANFID solely to **refuse every write action** on it,
+> and `/212` prints a refusal. If a 212 CIS ever genuinely dies,
+> investigate it deliberately; the byte-exact reference image is kept in
+> `probes/CIS_VEW212.BIN`.
 
 The 211 unit this project was written for was successfully repaired
 exactly that way (the first time by accident — long story, documented in
 `doc/ASIC.md`).
 
-Both reference images are **byte-exact captures from healthy units**
-(`probes/CIS_211_PRISTINE.BIN`, `probes/CIS_VEW212.BIN`; the older
-third-party 211 dump is kept as `probes/CIS_GOOD.BIN` for history). A 212
-quirk the image deliberately preserves: its CIS shadow is 128 dense bytes
-*mirrored* —
-the card presents bytes 128–255 as a repeat of 0–127 — so the embedded
-image carries the mirror, making injection alias-safe even if writes
-alias the same way (`probes/CIS_VEW212.TXT` has the full story).
+The embedded 211 reference image is a **byte-exact capture from our own
+healthy unit** (`probes/CIS_211_PRISTINE.BIN`; the older third-party dump
+is kept as `probes/CIS_GOOD.BIN` for history, and the 212 capture as
+`probes/CIS_VEW212.BIN` — reference only, no longer embedded).
 
 ## FMVOL — FM volume for a card that has none
 

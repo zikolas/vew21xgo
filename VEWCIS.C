@@ -1,4 +1,4 @@
-/* VEWCIS.C - CF-VEW211/CF-VEW212 CIS repair tool: heal the CIS, NOTHING else.
+/* VEWCIS.C - CF-VEW211 CIS repair tool: heal the CIS, NOTHING else.
  * Copyright (c) 2026 zikolas. MIT License.
  *
  * The minimal companion to VEW21XGO: finds the card, and if its CIS reads
@@ -12,8 +12,8 @@
  * but not power-down or eject.
  *
  * A DEAD CARD CANNOT SAY WHICH MODEL IT IS, so every operation that
- * writes the shadow requires the model on the command line: /211 or
- * /212.  (Since v2.0 the VEW21XGO enabler never writes the CIS itself -
+ * writes the shadow requires the model on the command line: /211.
+ * (Since v2.0 the VEW21XGO enabler never writes the CIS itself -
  * it enables dead-CIS cards read-only from built-in config, and repair
  * lives here, on purpose.)
  *
@@ -29,6 +29,15 @@
  * VEW211/212 identity.  Confirm the card, capture its current CIS first if
  * unsure, and prefer the volatile heal (no /BURN) when experimenting. ***
  *
+ * *** v2.3: ALL CF-VEW212 WRITE SUPPORT REMOVED.  The 212's ASIC is NOT
+ * the 211's: its config register file differs (attr 0x204/0x206 do not
+ * read back at all) and NO commit/erase mechanism has ever been proven
+ * on it - so a "repair" would fire 211 reflexes at unknown registers on
+ * a rare card.  VEWCIS still recognizes a healthy 212 by MANFID, but
+ * only to REFUSE every write action on it.  If a 212 CIS ever genuinely
+ * dies, investigate deliberately - do not reach for this tool.  (The
+ * byte-exact reference image lives on in probes/CIS_VEW212.BIN.) ***
+ *
  * /BURN makes the repair PERMANENT. The MEI ASIC's config register at
  * attribute 0x204 (undeclared in the CIS) is a whole-shadow EEPROM commit
  * strobe: pulsing bit0 writes the entire 256-byte shadow back to the
@@ -38,13 +47,9 @@
  * strobe, then power-cycles again and verifies the EEPROM reloads the
  * pristine image by itself.
  *
- * Usage: VEWCIS [/211 | /212] [/BURN | /RESTORE] [/S=0..7] [/W=D000] [/?]
+ * Usage: VEWCIS [/211] [/BURN | /RESTORE] [/S=0..7] [/W=D000] [/?]
  *   /211      the reference image is the CF-VEW211 dump (byte-exact
  *             capture from our own pristine unit, "Version 1.2" CIS)
- *   /212      the reference image is the CF-VEW212 "Sound Card PRO" dump
- *             (byte-exact capture from a healthy unit, 2026-07-19; the
- *             212's shadow is 128 dense bytes mirrored x2 and the image
- *             carries the mirror, so injection is alias-safe)
  *   /BURN     permanently program the repaired CIS into the card's EEPROM
  *             (verified across a power cycle; skips if EEPROM already healthy)
  *   /RESTORE  like /BURN but unconditional: burns the selected reference
@@ -59,7 +64,7 @@
 #include <stdlib.h>
 #include <i86.h>
 
-#define VEWCIS_VER "2.2"
+#define VEWCIS_VER "2.3"
 #define PCIC_BASE 0x3E0
 #define MAX_SOCKET 7
 #define VEW_MANF    0x0032
@@ -92,34 +97,11 @@ static const unsigned char cis_211[256] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 };
 
-/* CF-VEW212 "Sound Card PRO" CIS (256 bytes) - BYTE-EXACT capture from a
- * healthy unit, 2026-07-19 (probes/CIS_VEW212.BIN, two stable read
- * passes; see probes/CIS_VEW212.TXT).  The 212's shadow is 128 dense
- * bytes MIRRORED: the card presents bytes 128-255 as a repeat of 0-127,
- * and this table carries that mirror deliberately - if the aliasing
- * applies to writes too, a zero-padded top half would erase the real
- * content on injection, while this image is idempotent.  Note the
- * vendor byte 0x69 at offset 105, just past the FF end-of-chain marker. */
-static const unsigned char cis_212[256] = {
-    0x01,0x02,0x00,0xFF,0x17,0x02,0xD1,0xFF,0x15,0x2E,0x04,0x01,0x50,0x61,0x6E,0x61,
-    0x73,0x6F,0x6E,0x69,0x63,0x00,0x53,0x6F,0x75,0x6E,0x64,0x20,0x43,0x61,0x72,0x64,
-    0x20,0x50,0x52,0x4F,0x00,0x43,0x46,0x2D,0x56,0x45,0x57,0x32,0x31,0x32,0x00,0x56,
-    0x65,0x72,0x20,0x31,0x2E,0x30,0x00,0xFF,0x1A,0x05,0x01,0x20,0x00,0x02,0x03,0x1B,
-    0x14,0xE0,0x81,0x9D,0x11,0x55,0x1E,0xFC,0x23,0xAC,0x61,0x30,0x05,0x09,0x88,0x03,
-    0x03,0x30,0x80,0x0E,0x08,0x20,0x04,0x32,0x00,0x01,0x05,0x21,0x02,0xFF,0x00,0x10,
-    0x05,0xA1,0xFF,0x5F,0x00,0xCD,0x14,0x00,0xFF,0x69,0x00,0x00,0x00,0x00,0x00,0x00,
-    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-    0x01,0x02,0x00,0xFF,0x17,0x02,0xD1,0xFF,0x15,0x2E,0x04,0x01,0x50,0x61,0x6E,0x61,
-    0x73,0x6F,0x6E,0x69,0x63,0x00,0x53,0x6F,0x75,0x6E,0x64,0x20,0x43,0x61,0x72,0x64,
-    0x20,0x50,0x52,0x4F,0x00,0x43,0x46,0x2D,0x56,0x45,0x57,0x32,0x31,0x32,0x00,0x56,
-    0x65,0x72,0x20,0x31,0x2E,0x30,0x00,0xFF,0x1A,0x05,0x01,0x20,0x00,0x02,0x03,0x1B,
-    0x14,0xE0,0x81,0x9D,0x11,0x55,0x1E,0xFC,0x23,0xAC,0x61,0x30,0x05,0x09,0x88,0x03,
-    0x03,0x30,0x80,0x0E,0x08,0x20,0x04,0x32,0x00,0x01,0x05,0x21,0x02,0xFF,0x00,0x10,
-    0x05,0xA1,0xFF,0x5F,0x00,0xCD,0x14,0x00,0xFF,0x69,0x00,0x00,0x00,0x00,0x00,0x00,
-    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-};
+/* v2.3: the CF-VEW212 reference image was REMOVED together with all 212
+ * write support (see header warning).  The byte-exact capture survives in
+ * probes/CIS_VEW212.BIN + CIS_VEW212.TXT. */
 
-/* the image selected by /211 or /212; NULL until the user chooses */
+/* the image selected by /211; NULL until the user chooses */
 static const unsigned char *ref_img  = 0;
 static const char          *ref_name = "";
 
@@ -293,11 +275,11 @@ static int sw(const char *a, const char *name, char **val)
 static void usage(void)
 {
     printf(
-    "VEWCIS %s - CIS repair tool for the Panasonic CF-VEW211 / CF-VEW212.\n"
+    "VEWCIS %s - CIS repair tool for the Panasonic CF-VEW211.\n"
     "Heals or reprograms the card's CIS shadow/EEPROM; touches nothing else\n"
     "(no COR write, no I/O mapping, no mixer).\n\n"
-    "Usage: VEWCIS [/211 | /212] [/BURN | /RESTORE] [/S=0..7] [/W=D000]\n\n"
-    "  /211 /212   select the reference CIS image - REQUIRED to write the\n"
+    "Usage: VEWCIS [/211] [/BURN | /RESTORE] [/S=0..7] [/W=D000]\n\n"
+    "  /211        select the reference CIS image - REQUIRED to write the\n"
     "              shadow, since a dead card cannot say which model it is\n"
     "  (no action) volatile heal: inject the image into the shadow and leave\n"
     "              the card powered + self-describing until the next power-down\n"
@@ -306,6 +288,8 @@ static void usage(void)
     "  /RESTORE    like /BURN but unconditional - overwrite even a valid CIS\n"
     "  /S=dec      socket 0..7 (default: auto-scan)\n"
     "  /W=hex      attribute-window segment (default D000, auto-relocates)\n\n"
+    "CF-VEW212: recognized but READ-ONLY - all 212 write support was removed\n"
+    "in v2.3 (different ASIC, no proven commit/erase mechanism).\n\n"
     "With no /BURN or /RESTORE the repair is volatile (RAM shadow only).\n"
     "To actually use the card (codec + FM), enable it with VEW21XGO.\n",
     VEWCIS_VER);
@@ -322,7 +306,13 @@ int main(int argc, char **argv)
         if (arg[0] != '/' && arg[0] != '-') continue;
         if (sw(arg, "?", &vp) || sw(arg, "H", &vp) || sw(arg, "HELP", &vp)) { usage(); return 0; }
         if      (sw(arg, "211", &vp)) { ref_img = cis_211; ref_name = "CF-VEW211"; }
-        else if (sw(arg, "212", &vp)) { ref_img = cis_212; ref_name = "CF-VEW212"; }
+        else if (sw(arg, "212", &vp)) {
+            printf("/212 support was removed in v2.3: no commit/erase mechanism has ever\n"
+                   "been proven on the CF-VEW212's ASIC (it is not the 211's), so writing\n"
+                   "its shadow/EEPROM with 211 semantics is not safe.  If a 212 CIS is\n"
+                   "genuinely dead, investigate deliberately - this tool won't touch it.\n");
+            return 2;
+        }
         else if (sw(arg, "BURN", &vp)) burn = 1;
         else if (sw(arg, "RESTORE", &vp)) { burn = 1; restore = 1; }
         else if (sw(arg, "S", &vp)) { if (vp) { sock = (unsigned)strtol(vp, 0, 10); sgiven = 1; } }
@@ -331,7 +321,7 @@ int main(int argc, char **argv)
     }
     if (sgiven && sock > MAX_SOCKET) { printf("Bad /S=%u : 0..%u\n", sock, MAX_SOCKET); return 2; }
     if (restore && !ref_img) {
-        printf("/RESTORE needs the card model: /211 or /212.\n"); return 2;
+        printf("/RESTORE needs the card model: /211.\n"); return 2;
     }
     if (!wgiven) {
         unsigned freeseg = find_free_window(memseg);
@@ -363,6 +353,13 @@ int main(int argc, char **argv)
 
     printf("VEWCIS %s - socket %u%s\n", VEWCIS_VER, sock, sgiven ? "" : " (auto)");
 
+    if (g_manf == VEW_MANF && g_card == VEW212_CARD && burn) {
+        printf("   This is a CF-VEW212 (\"%s\").\n", g_vers);
+        printf("   REFUSING: 212 write support was removed in v2.3 - no commit/erase\n");
+        printf("   mechanism has ever been proven on this card's ASIC.\n");
+        return 2;
+    }
+
     if (burn) {
         /* learn the TRUE EEPROM state (a warm shadow can mask a dead EEPROM) */
         printf("   /BURN: power-cycling to read the true EEPROM state...\n");
@@ -376,7 +373,8 @@ int main(int argc, char **argv)
         if (!ref_img) {
             printf("   CIS is %s - a dead card cannot say which model it is:\n",
                    g_cisdead ? "DEAD" : "not a known VEW21x");
-            printf("   specify /211 or /212 to burn.\n");
+            printf("   specify /211 to burn.  If this could be a CF-VEW212, STOP:\n");
+            printf("   212 write support was removed in v2.3 (unproven ASIC semantics).\n");
             wr(0x06, rd(0x06) & ~0x01);
             return 2;
         }
@@ -407,7 +405,8 @@ int main(int argc, char **argv)
     }
     if (!ref_img) {
         printf("   CIS is DEAD (stuck %02X fill) - a dead card cannot say which model\n", g_cisfill);
-        printf("   it is: specify /211 or /212 to inject.\n");
+        printf("   it is: specify /211 to inject.  If this could be a CF-VEW212,\n");
+        printf("   STOP: 212 write support was removed in v2.3 (unproven ASIC semantics).\n");
         wr(0x06, rd(0x06) & ~0x01);
         return 2;
     }
