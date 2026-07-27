@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.2 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.3 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -29,13 +29,15 @@
 ;    The codec powers up muted; FM does NOT pass through the codec (it sums
 ;    after it, and has no hardware volume - proven exhaustively).
 ;
-;  THE CF-VEW212 "Sound Card PRO" (MANFID 0032/0501, CIS captured
-;  2026-07-19 - probes/CIS_VEW212.TXT): same ASIC family, and its single
-;  config entry is BIT-IDENTICAL to the 211's default - but it is index
-;  20h ONLY, so the codec base is FIXED at 530h (no E80/F40/604; /IO is
-;  overridden with a note).  It carries an OPL4 (YMF278) wavetable whose
-;  register mapping is still under recon - this enabler brings up the
-;  codec + OPL3 side, which the 212 declares identically.
+;  THE CF-VEW212 "Sound Card PRO" (MANFID 0032/0501): RECOGNIZED BUT
+;  NOT CONFIGURED (since 2.3).  Its CIS declares a single entry
+;  bit-identical to the 211's default - but on real hardware that config
+;  is DEAD (no codec, no FM answer); the card actually runs on config
+;  indexes its CIS never declares (vendor recon: MPU-401 at 330h + OPL4
+;  FM/wave at 388h-38Dh under COR index 26h; a codec config attested by
+;  the Win95 INF - see doc/DUMP212-VND-*.TXT).  Until this enabler can
+;  set those configs properly, a healthy 212 is reported and DECLINED;
+;  /FORCE /S=n still sets the dead declared entry for experimenters.
 ;
 ;  DEAD-CIS CARDS: the ASIC shadows the CIS in RAM loaded from a 93LC56
 ;  EEPROM; when that load fails the whole tuple region reads one stuck
@@ -94,7 +96,7 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0202h
+VGVER   equ 0203h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
 VBMAX   equ 80h                       ; VERS_1 capture buffer size.  The
@@ -154,7 +156,7 @@ O_LEN    equ $-o_io
 
 ; ---- identity / result block (contiguous: handoff copies R_LEN back) ----
 arg_sock dw 0                         ; input to cs_configure
-r_stage  db 0                         ; 0=ok 2=io 4=cfg 5=codec 6=wrongcard 7=nocard
+r_stage  db 0                         ; 0=ok 2=io 4=cfg 5=codec 6=wrongcard 7=nocard 8=212declined
 r_code   dw 0                         ; CS status of the failing call
 manfid   dw 0                         ; CISTPL_MANFID: TPLMID_MANF
          dw 0                         ;                TPLMID_CARD
@@ -276,16 +278,22 @@ P_RIRQ_LEN equ 5
 ;  212 declares no alternates) - a different /IO is overridden, noted in
 ;  the summary via [r_iofix].
 ;
+;  K_UNSUP: the card is identified, but no configuration this enabler
+;  can set is known to WORK (the 212: its declared entry is dead on real
+;  hardware, its working configs are undeclared in the CIS) - report and
+;  decline, unless /FORCE sets the declared entry anyway.
+;
 ;  record: +0 manf, +2 card, +4 flags, +5 name ptr
 ;==========================================================================
 K_FIX530 equ 01h
+K_UNSUP  equ 02h
 KREC     equ 7
 ktab:
         dw VEW_MANF, 0001h
         db 0
         dw n_vew
         dw VEW_MANF, 0501h
-        db K_FIX530
+        db K_FIX530 | K_UNSUP
         dw n_v212
         dw 0, 0                       ; end of table
 
@@ -309,7 +317,18 @@ identify:
         mov  ax, [si+5]
         mov  [k_name], ax
         mov  byte [matched], 1
-        test byte [k_flags], K_FIX530 ; fixed-base card: only 530h exists
+        test byte [k_flags], K_UNSUP  ; recognized, but no working config known
+        jz   .sup
+        cmp  byte [o_force], 0        ; /FORCE: set the (dead) declared entry
+        jne  .frc
+        mov  byte [saw212], 1         ; report as declined, not unknown
+        mov  byte [matched], 0
+        pop  ax
+        pop  si
+        stc
+        ret
+.frc:   mov  byte [f212], 1           ; note the forced 212 for the summary
+.sup:   test byte [k_flags], K_FIX530 ; fixed-base card: only 530h exists
         jz   .ok
         cmp  word [o_io], 0530h
         je   .ok
@@ -508,7 +527,10 @@ cs_configure:
         call identify
         jnc  .known
         mov  byte [r_stage], 6        ; not one of ours
-        jmp  .out
+        cmp  byte [saw212], 0
+        je   .w212
+        mov  byte [r_stage], 8        ; recognized 212, declined (no config)
+.w212:  jmp  .out
 .known:
         mov  al, [coridx]
         or   al, 40h                  ; COR index | level-mode IRQ (the card
@@ -1530,7 +1552,12 @@ cs_repsock:
         je   .r                       ; success: main summary reports it
         cmp  al, 5
         je   .r                       ; codec verdict handled by main summary
-        cmp  al, 7
+        cmp  al, 8
+        jne  .n8
+        mov  si, m_s_212
+        call prstr
+        jmp  .nl
+.n8:    cmp  al, 7
         jne  .n6
         mov  si, m_s_tup              ; empty socket / unreadable CIS
         call prstr
@@ -1738,7 +1765,12 @@ ob_got:
 
 ; ---------- failure reporting --------------------------------------------
 ob_failx:                             ; /S given; [failwhy] says what
-        cmp  byte [sawdead], 0
+        cmp  byte [saw212], 0
+        je   .no212
+        mov  si, m_212decl
+        call prstr
+        int  20h
+.no212: cmp  byte [sawdead], 0
         je   .fdead
         mov  si, m_deadcis
         call prstr
@@ -1776,6 +1808,12 @@ ob_failx:                             ; /S given; [failwhy] says what
         int  20h
 
 ob_fails:
+        cmp  byte [saw212], 0
+        je   .sno212
+        mov  si, m_212decl
+        call prstr
+        int  20h
+.sno212:
         cmp  byte [sawdead], 0
         je   .sdead
         mov  si, m_deadcis
@@ -2223,7 +2261,12 @@ pc_mode:
 .p1:
         call pc_probe
         jnc  pc_found
-        cmp  word [manfid], 0
+        cmp  byte [saw212], 0
+        je   .n212a
+        mov  si, m_212decl
+        call prstr
+        int  20h
+.n212a: cmp  word [manfid], 0
         je   .norc
         mov  si, m_socket
         call prstr
@@ -2269,7 +2312,12 @@ pc_mode:
         mov  si, m_nopcic
         jmp  errout
 .nomatch:
-        cmp  word [manfid], 0
+        cmp  byte [saw212], 0
+        je   .n212b
+        mov  si, m_212decl
+        call prstr
+        int  20h
+.n212b: cmp  word [manfid], 0
         je   .noknown
         mov  si, m_nomatch
         call prstr
@@ -3260,7 +3308,11 @@ report:
         call prstr
 .mixdone:
 ; optional notes
-        cmp  byte [r_iofix], 0
+        cmp  byte [f212], 0
+        je   .nf212
+        mov  si, m_212fw
+        call prstr
+.nf212: cmp  byte [r_iofix], 0
         je   .nfx
         mov  si, m_iofix
         call prstr
@@ -3671,15 +3723,17 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.2 - CF-VEW211/212 enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.3 - CF-VEW211 enabler, 212-aware (PCIC/CS/OB)',13,10,0
 m_help:
- db 'Enables the Panasonic CF-VEW211 / CF-VEW212 PC Card sound cards with no',13,10
- db 'Card Services needed (CS4231A WSS codec + OPL3 FM; 212 adds an OPL4).',13,10,13,10
+ db 'Enables the Panasonic CF-VEW211 PC Card sound card with no Card',13,10
+ db 'Services needed (CS4231A WSS codec + OPL3 FM).  The CF-VEW212 is',13,10
+ db 'recognized but NOT configured (since 2.3): its working configurations',13,10
+ db 'are undeclared in its CIS - support in progress.',13,10,13,10
  db 'Usage: VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T] [/SPKR]',13,10
  db '                [/NOFM] [/S=n] [/W=D000] [/FORCE] [/OFF]',13,10,13,10
  db '  (no mode)  auto-detect host: Card Services, then OmniBook SS, then PCIC',13,10
  db '  /PCIC /CS /OB  force the host backend',13,10
- db '  /IO=hex    codec base 530(def)/E80/F40/604 (212 is 530-only); OPL3=388',13,10
+ db '  /IO=hex    codec base 530(def)/E80/F40/604; OPL3 always at 388',13,10
  db '  /I=dec     IRQ 7/9/10/11 (level-mode card; default 0 = none)',13,10
  db '  /VOL=dec   DAC attenuation, 1.5 dB/step, 0..63 (default 24 = -36 dB)',13,10
  db '  /T         play a short FM test tone after enabling',13,10
@@ -3689,7 +3743,7 @@ m_help:
  db '  /W=hex     attribute-window segment for CIS/COR access (PCIC; def D000)',13,10
  db '  /FORCE     configure without the CIS check; REQUIRED for a dead-CIS card',13,10
  db '  /OFF       PCIC: power the socket down;  CS: release + go dormant',13,10,13,10
- db 'Repair a dead/blank CIS with the companion tool: VEWCIS /211 or /212.',13,10,0
+ db 'Repair a dead/blank CIS with the companion tool: VEWCIS /211.',13,10,0
 m_hostcs:  db 'Host: PCMCIA Card Services',13,10,0
 m_hostob:  db 'Host: Socket Services (OmniBook)',13,10,0
 m_hostpc:  db 'Host: 82365-class PCIC (direct)',13,10,0
@@ -3749,6 +3803,14 @@ m_addman3: db '  Use /FORCE to force, if you are sure.',13,10,0
 m_deadcis: db 'A card with a DEAD/blank CIS is present. If you are sure it is'
            db ' a',13,10,'  CF-VEW211/212, enable it with /FORCE /S=n - or'
            db ' repair the CIS with',13,10,'  VEWCIS /211|/212.',13,10,0
+m_212decl: db 'A CF-VEW212 (Sound Card PRO) was recognized but NOT configured: its',13,10
+           db 'working configurations are undeclared in its CIS, and the declared',13,10
+           db 'one is dead on real hardware - this enabler cannot bring the 212 up',13,10
+           db 'yet (recon complete, support in progress).  Use the vendor stack for',13,10
+           db 'now, or /FORCE /S=n to set the dead declared config anyway.',13,10,0
+m_s_212:   db '   CF-VEW212 recognized - NOT configured (no working config known yet)',0
+m_212fw:   db '   WARNING: /FORCE set the CIS-declared config on a CF-VEW212 - that',13,10
+           db '   config is dead on real hardware; expect no audio.',13,10,0
 m_noknown: db 'No CF-VEW211/212 (or dead-CIS card) in any socket.',13,10,0
 m_noknown2: db 'No CF-VEW211/212 (or dead-CIS card) found in any socket.',13,10,0
 m_nomatch: db 'Not a CF-VEW211/212 (last seen ',0
@@ -3811,6 +3873,8 @@ o_wgiven:  db 0
 o_verb:    db 0                       ; /V: show the working detail
 sock:      db 0                       ; current socket (OB/PCIC)
 sawunk:    db 0
+saw212:    db 0                       ; recognized a 212 but declined (no /FORCE)
+f212:      db 0                       ; /FORCE configured a 212 declared entry
 sawdead:   db 0                       ; saw a dead-CIS card but /FORCE absent
 pwrsettle: db 1                       ; 1 = we powered the card, so the
                                       ; output stage still needs settling

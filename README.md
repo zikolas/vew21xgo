@@ -1,9 +1,15 @@
-# VEW21XGO — a DOS enabler for the Panasonic CF-VEW211 / CF-VEW212 PCMCIA sound cards
+# VEW21XGO — a DOS enabler for the Panasonic CF-VEW211 PCMCIA sound card
 
-A single-command DOS **enabler** for the Matsushita/Panasonic PCMCIA sound
-cards: the **CF-VEW211** (1994 — CS4231A WSS codec + YMF262 OPL3) and the
-**CF-VEW212 "Sound Card PRO"** (same ASIC family, plus an OPL4 wavetable).
-One ~10 KB `.COM`, three host backends, auto-detected:
+A single-command DOS **enabler** for the Matsushita/Panasonic **CF-VEW211**
+PCMCIA sound card (1994 — CS4231A WSS codec + YMF262 OPL3). One ~12 KB
+`.COM`, three host backends, auto-detected.
+
+Its sibling, the **CF-VEW212 "Sound Card PRO"** (related ASIC, OPL4
+wavetable), is **recognized but deliberately not configured** as of 2.3:
+recon showed its working configurations are not the one its CIS declares
+(see [The cards](#the-cards) below), and this enabler cannot set them
+yet. A healthy 212 is identified, reported, and declined — support is in
+progress.
 
 | Mode | Host | Status |
 |---|---|---|
@@ -29,7 +35,7 @@ Three tools ship here, each doing one job:
 | | |
 |---|---|
 | **`VEW21XGO`** | brings the card up — this is the one you need |
-| **`VEWCIS`** | repairs a card whose CIS EEPROM has failed, permanently and in software |
+| **`VEWCIS`** | repairs a 211 whose CIS EEPROM has failed, permanently and in software |
 | **`FMVOL`** | gives the FM synth the volume control the hardware does not have |
 
 Clean-room: built from healthy cards' own CIS dumps, the public Intel
@@ -49,8 +55,9 @@ VEW21XGO /T
 ```
 
 With no `/S`, VEW21XGO scans the sockets and configures the first
-CF-VEW211/212 it finds, tagged `(auto)` in its output. (A card with a
-dead/blank CIS is reported but not configured unless you add `/FORCE`.)
+CF-VEW211 it finds, tagged `(auto)` in its output. (A card with a
+dead/blank CIS is reported but not configured unless you add `/FORCE`;
+a CF-VEW212 is reported and declined — see above.)
 
 ```
 VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
@@ -58,8 +65,7 @@ VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
 
   /IO=hex   codec base — 530 (default) / E80 / F40 / 604 (picks the
             matching COR index; codec registers at base+4, OPL3 always
-            388). The alternates are 211-only: a CF-VEW212 declares just
-            the 530 configuration and is forced to it, with a note.
+            388).
   /I=dec    IRQ to route — 7, 9, 10 or 11 only (level-mode cards;
             default 0 = none, FM needs no IRQ)
   /VOL=dec  DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
@@ -92,9 +98,9 @@ the `.EXE` to avoid confusion).
 | | Feature |
 |:---:|---|
 | ✅ | **Three host backends in one binary** — direct PCIC, Card Services client (hot-plug TSR), OmniBook Socket Services |
-| ✅ | **Both cards** — CF-VEW211 and CF-VEW212 "Sound Card PRO", matched by MANFID |
+| ✅ | **CF-VEW212 protected** — recognized by MANFID and declined with an explanation (its working configs are undeclared in its CIS; enabling support is in progress) |
 | ✅ | **OPL3 FM synthesis** at the standard AdLib port `0x388` — games just work |
-| ✅ | **WSS codec** (CS4231A) at `0x530` (211 also: `0xE80` / `0xF40` / `0x604`) |
+| ✅ | **WSS codec** (CS4231A) at `0x530` / `0xE80` / `0xF40` / `0x604` |
 | ✅ | **Dead-CIS cards recognized** — flagged by their fill signature; configured from built-in knowledge only under `/FORCE`, never written to |
 | ✅ | **PCM volume** (`/VOL`) — DAC attenuation in 1.5 dB steps |
 | ✅ | **Mixer un-mute** — the codec powers up silent; write-verified, retried ms-paced (cold-codec quirk) |
@@ -218,24 +224,35 @@ ear, and the route to catching protected-mode games too — is in
 | | | `0x21` | `0xE80` | `0x388` |
 | | | `0x22` | `0xF40` | `0x388` |
 | | | `0x23` | `0x604` | `0x388` |
-| CF-VEW212 | `0032/0501` | `0x20` (only) | `0x530` | `0x388` |
+| CF-VEW212 | `0032/0501` | `0x20` (declared) | `0x530` | `0x388` |
 
 Config registers (COR + CCSR) live at attribute offset `0x200` on both.
 The COR reads back with the LevlREQ bit pinned high — these cards only do
 level-mode interrupts, hence the `{7, 9, 10, 11}` IRQ set from the CIS.
-The 212's lone config entry is byte-identical to the 211's default.
 
-**Digital audio works — without DMA.** The CS4231A accepts PIO sample
-transfer, and `probes/VEWPLAY.C` is a working PIT-paced `.WAV` player
-(see `probes/README.md` for the protocol gotchas that make it work).
-**FM has no hardware volume control** on the 211 — the OPL3's audio
-(YMF262 → YAC512 DAC) is summed after the codec, and an exhaustive
+**Digital audio works on the 211 — without DMA.** The CS4231A accepts PIO
+sample transfer, and `probes/VEWPLAY.C` is a working PIT-paced `.WAV`
+player (see `probes/README.md` for the protocol gotchas that make it
+work). **FM has no hardware volume control** on the 211 — the OPL3's
+audio (YMF262 → YAC512 DAC) is summed after the codec, and an exhaustive
 register hunt found nothing that attenuates it (`doc/ASIC.md`).
 
-The 212 additionally carries an **OPL4 (YMF278) MIDI wavetable** — its
-register mapping is an ongoing recon effort (`probes/CIS_VEW212.TXT` has
-the plan; the prime suspect for the wave register pair is the `base+8/+9`
-region that on the 211 was an empty hidden register bank).
+**The 212 is a different animal wearing the 211's CIS.** Its single
+declared config entry is byte-identical to the 211's default — and on
+real hardware it is **dead**: with COR index `0x20` set, nothing answers
+at the codec or FM ports. Live recon against the period vendor stack
+(`doc/DUMP212-VND-IDLE.TXT` / `-POST.TXT`, captured with
+`probes/VEW2DUMP.C`) shows the card actually running on an **undeclared
+COR index `0x26`**: an MPU-401 UART at `330` plus its **OPL4 (YMF278)**
+FM+wave block at `388–38D` (wave register pair at `38C/38D`, observed
+live during MIDI playback), on 16-bit autosized windows — and no codec
+window at all. The vendor's Windows 95 INF additionally attests a codec
+configuration on another undeclared index. A passive register sweep
+(`probes/VEW2SCAN.C`) confirmed the ASIC differs from the 211's (config
+file is COR+CCSR only; the 211's vendor registers at `0x204`–`0x208`
+don't exist). Bringing the 212 up properly on those real configurations
+is the current work — until then the enabler declines it rather than
+configure a layout the card does not serve.
 
 ## History: the 1.x C enabler
 

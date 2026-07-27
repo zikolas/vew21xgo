@@ -141,3 +141,39 @@ seen at all; ORDER MATTERS - the dump comes before any attr writes):
   5. wave ROM presence (YRW801?) via the OPL4 memory interface
   6. capture a byte-exact 256-byte CIS dump (verify the reconstructed
      VEWCIS /212 image)
+
+==========================================================================
+ADDENDUM 2026-07-27 - the plan above is SUPERSEDED: recon is COMPLETE
+==========================================================================
+
+The live vendor-stack capture happened (doc/DUMP212-VND-IDLE.TXT and
+DUMP212-VND-POST.TXT, taken with probes/VEW2DUMP.C on a PC110 running
+the period CS + vendor DOS stack, MIDI playing and idle), plus a passive
+ASIC sweep (probes/VEW2SCAN.C). Results, replacing the guesses above:
+
+ - The vendor stack runs the card on UNDECLARED COR index 0x26 (COR
+   reads 0x66): MPU-401 UART at 330-333 + OPL4 FM/wave at 388-38D,
+   both windows 16-bit autosized (PCIC ioctl 0x22), IRQ 9, CCSR 0x08.
+   There is NO codec window in this configuration at all.
+ - The wave register pair is 38C/38D - observed churning during live
+   MIDI playback. The old "base+8/+9" suspect is dead: the sweep shows
+   the 212's ASIC is not the 211's (config file = COR + CCSR only;
+   attr 0x204/0x206/0x208 do not exist - they read as floating bus),
+   so the 211's hidden bank has no analogue here.
+ - The CIS-declared index 0x20 (codec 530 + FM 388) is DEAD on real
+   hardware: with it set, codec, OPL3 and wave ports all read driven-00
+   and nothing responds. The single declared entry appears vestigial.
+ - The vendor's Windows 95 INF attests a THIRD personality on another
+   undeclared index: codec at 530/E80/F40 (the 211's alternate-base
+   table) + the OPL4 block, again explicitly 16-bit ports.
+ - Step 6 happened long ago: the byte-exact capture is CIS_VEW212.BIN
+   (this file's own dump), and VEWCIS carried it embedded until 2.3
+   removed all 212 write support (different ASIC, no proven commit or
+   erase mechanism - see the VEWCIS 2.3 notes in the README).
+
+Current state: VEW21XGO 2.3 recognizes a healthy 212 and DECLINES to
+configure it (the declared entry being dead, configuring it only
+pretends). Next step is bringing the card up on its REAL configs from
+a clean boot - index 0x26 first (MPU+OPL4, proven live), then the
+INF-attested codec index - and folding that into the enabler as proper
+/212 support.
