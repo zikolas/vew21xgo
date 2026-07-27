@@ -1918,6 +1918,7 @@ ob_try:
         xor  di, di
         call ob_ssvc
         jc   .no
+        call cis_settle               ; data-gate: READY is not enough
         call cis_even                 ; pull the even bytes
         call cis_parse                ; CF ignored: defaults hold
         call cis_deadchk
@@ -2673,6 +2674,7 @@ pc_probe:
         call pc_wr
         mov  ax, 20
         call ms_delay
+        call cis_settle               ; data-gate: READY is not enough
         call cis_even
         call cis_parse                ; CF ignored: cfgbase stays 200h
         call cis_deadchk
@@ -2862,6 +2864,63 @@ mw_overlap:
 ; cis_even: copy CISLEN even host bytes from [o_wseg]:0 into cisbuf.
 ; (Attribute memory only implements even card addresses; the odd host
 ;  bytes float.)
+; ---- cis_settle: gate the CIS read on the DATA, not on delays or READY.
+;      Attribute memory lags socket power by a HOST-specific time (PC110
+;      ~30ms, ThinkPad 235 ~110ms measured), and the READY bit can assert
+;      well BEFORE the CIS reads true (235: ~55ms) - a too-early read
+;      returns an all-FF wall for ANY card (see ~/Projects/
+;      pcmcia-cis-ff-bug.md; this false-diagnosed a healthy card as
+;      wiped).  A valid CIS never begins with FF, so poll byte 0: a
+;      settled card exits on the first read; a genuinely FF-dead card
+;      pays the full ~5s once and the dead verdict is then trustworthy.
+; Two-clause gate: un-settled reads are all-FF on some hosts (235 cold
+; power) but UNSTABLE NON-FF GARBAGE on others (PC110 after a power
+; cycle) - so require byte0 != FF AND dense bytes 0-3 identical across
+; two reads 20ms apart.  Genuinely FF-dead card: one full timeout, then
+; the dead verdict is real.  07-wall dead card: exits fast.
+cis_settle:
+        push ax
+        push bx
+        push cx
+        push dx
+        push di
+        push es
+        mov  es, [o_wseg]
+        mov  cx, 250                  ; 250 x 20ms = ~5s cap
+        call .snap                    ; DX:BX = dense bytes 0-3
+        mov  ax, dx
+        mov  di, bx                   ; previous snapshot in AX:DI
+.w:     push ax
+        mov  ax, 20
+        call ms_delay
+        pop  ax
+        push ax
+        push di
+        call .snap
+        pop  di
+        pop  ax
+        cmp  bl, 0FFh                 ; clause 1: byte0 != FF
+        je   .miss
+        cmp  ax, dx                   ; clause 2: stable vs previous
+        jne  .miss
+        cmp  di, bx
+        je   .ok
+.miss:  mov  ax, dx                   ; roll the snapshot forward
+        mov  di, bx
+        loop .w
+.ok:    pop  es
+        pop  di
+        pop  dx
+        pop  cx
+        pop  bx
+        pop  ax
+        ret
+.snap:  mov  bl, [es:0]               ; dense 0..3 (even host offsets)
+        mov  bh, [es:2]
+        mov  dl, [es:4]
+        mov  dh, [es:6]
+        ret
+
 cis_even:
         push ax
         push cx

@@ -64,7 +64,7 @@
 #include <stdlib.h>
 #include <i86.h>
 
-#define VEWCIS_VER "2.3"
+#define VEWCIS_VER "2.4"
 #define PCIC_BASE 0x3E0
 #define MAX_SOCKET 7
 #define VEW_MANF    0x0032
@@ -193,6 +193,42 @@ static void map_attr(unsigned memseg)
     wr(0x14, woff & 0xFF); wr(0x15, (woff >> 8) & 0xFF);
     wr(0x06, rd(0x06) | 0x01); iod(500);
 }
+/* Gate the CIS read on the DATA, not on delays or the READY bit.
+ * Attribute memory lags socket power by a HOST-specific time (PC110
+ * ~30ms, ThinkPad 235 ~110ms measured) and READY can assert well BEFORE
+ * the CIS reads true (235: ~55ms) - a too-early read returns an all-FF
+ * wall for ANY card.  This exact bug made 2.x falsely report a healthy
+ * CF-VEW212 as "CIS DEAD (stuck FF fill)" and abort /BURN's
+ * inject-verify on the 235 (see ~/Projects/pcmcia-cis-ff-bug.md).
+ * A valid CIS never begins with FF: poll byte 0 (settled card = exits
+ * on the first read; genuinely FF-dead card = pays ~5s once, and the
+ * dead verdict is then trustworthy). */
+/* Un-settled attribute reads are not merely all-FF (the 235's cold-power
+ * ramp) - after a power CYCLE the PC110 returns UNSTABLE GARBAGE with
+ * non-FF bytes, which sails through an FF-only gate.  So the gate is
+ * two-clause: byte 0 != FF (rules out the FF ramp and makes a genuinely
+ * FF-dead card pay one full timeout before its now-trustworthy verdict)
+ * AND the first 8 dense bytes identical across two reads 20ms apart
+ * (rules out the garbage ramp).  An 07-wall dead card exits fast. */
+static unsigned settle_polls;                  /* diagnostics: how long it took */
+static void cis_settle(unsigned memseg)
+{
+    unsigned t, k;
+    unsigned char a[8], b[8];
+    unsigned char __far *p = (unsigned char __far *)MK_FP(memseg, 0);
+    for (k = 0; k < 8; k++) a[k] = p[k * 2];
+    for (t = 0; t < 250; t++) {
+        MS(20);
+        for (k = 0; k < 8; k++) b[k] = p[k * 2];
+        if (b[0] != 0xFF) {
+            for (k = 0; k < 8 && a[k] == b[k]; k++) ;
+            if (k == 8) break;
+        }
+        for (k = 0; k < 8; k++) a[k] = b[k];
+    }
+    settle_polls = t;
+}
+
 /* full socket power cycle; leaves attribute window mapped */
 static int power_cycle(unsigned memseg)
 {
@@ -204,6 +240,7 @@ static int power_cycle(unsigned memseg)
     wr(0x03, 0x40); MS(10);
     for (t = 0; t < 600000UL; t++) if (rd(0x01) & 0x20) break;
     map_attr(memseg);
+    cis_settle(memseg);
     return 1;
 }
 
@@ -225,6 +262,7 @@ static int probe_socket(unsigned memseg)
     wr(0x03, s03 & 0x20 ? s03 : 0x40); MS(10);   /* deassert reset; keep I/O mode if in use */
     for (t = 0; t < 600000UL; t++) if (rd(0x01) & 0x20) break;
     map_attr(memseg);
+    cis_settle(memseg);
     read_cis(memseg);
     if (is_vew()) return 1;
     if (was_on) {
@@ -365,6 +403,11 @@ int main(int argc, char **argv)
         printf("   /BURN: power-cycling to read the true EEPROM state...\n");
         if (!power_cycle(memseg)) { printf("   power cycle failed\n"); return 1; }
         read_cis(memseg);
+        {   unsigned char __far *dp = (unsigned char __far *)MK_FP(memseg, 0);
+            printf("   [settle %u polls; cis %02X %02X %02X %02X %02X %02X; dead=%d manf=%04X/%04X]\n",
+                   settle_polls, dp[0], dp[2], dp[4], dp[6], dp[8], dp[10],
+                   g_cisdead, g_manf, g_card);
+        }
         if (!restore && !g_cisdead && is_healthy_vew()) {
             printf("   EEPROM already healthy (\"%s\") - nothing to burn.\n", g_vers);
             wr(0x06, rd(0x06) & ~0x01);

@@ -149,6 +149,16 @@ VEWCIS /?              show usage (also /H, /HELP)
 > **not independently confirmed to be a CF-VEW211/212** can permanently
 > stamp a *different* MEI-ASIC card with a VEW211/212 identity.
 >
+> ⏱️ **Never conclude a CIS is dead from one quick read.** Attribute
+> memory lags socket power-up by a **host-specific** settle time (PC110
+> ~30 ms, ThinkPad 235 ~110 ms measured) and the PCIC READY bit can
+> assert *before* the CIS reads true — a too-early read returns an
+> all-`FF` wall for **any** card. Since 2.4, VEWCIS (and the enabler)
+> gate every post-power CIS read on the data itself (a valid CIS never
+> begins with `FF`), so a "DEAD" verdict is trustworthy; older versions
+> could false-report a healthy card as dead on slower hosts. If in
+> doubt, re-read on a second machine before believing any tool.
+>
 > Before burning: be sure the card is a CF-VEW211. If in any doubt,
 > **capture its current CIS first** (a raw attribute-memory dump) and keep
 > it, and prefer the **volatile heal** (`/211` with no `/BURN`) — that

@@ -193,6 +193,19 @@ int main(int argc, char **argv)
         }
         MS(100);
         if (!mapattr()) { printf("socket %d: no attr window\n", s); continue; }
+        {   unsigned t, k;                                 /* data gate: byte0  */
+            unsigned char pa[8], pb[8];                    /* != FF AND stable  */
+            for (k = 0; k < 8; k++) pa[k] = hostb(k * 2);  /* (un-settled reads */
+            for (t = 0; t < 250; t++) {                    /* = FF ramp OR      */
+                MS(20);                                    /* unstable garbage; */
+                for (k = 0; k < 8; k++) pb[k] = hostb(k*2);/* cis-ff-bug.md)    */
+                if (pb[0] != 0xFF) {
+                    for (k = 0; k < 8 && pa[k] == pb[k]; k++) ;
+                    if (k == 8) break;
+                }
+                for (k = 0; k < 8; k++) pa[k] = pb[k];
+            }
+        }
         if (is212()) { found = s; break; }                 /* window stays  */
         printf("socket %d: not a CF-VEW212 - untouched (win %04X, cis: %02X %02X %02X %02X)\n",
                s, winseg, hostb(0), hostb(2), hostb(4), hostb(6));
