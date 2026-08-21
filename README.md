@@ -1,10 +1,11 @@
-# VEW21XGO — a DOS enabler for the Panasonic CF-VEW211 PCMCIA sound card
+# VEW21XGO — a DOS enabler for the CF-VEW211 / PC-9801N-J04 PCMCIA sound cards
 
 A single-command DOS **enabler** for the Matsushita/Panasonic **CF-VEW211**
-PCMCIA sound card (1994 — CS4231A WSS codec + YMF262 OPL3). One ~12 KB
-`.COM`, three host backends, auto-detected.
+PCMCIA sound card (1994 — CS4231A WSS codec + YMF262 OPL3) and, since 2.4,
+its NEC-badged PC-98 sibling the **PC-9801N-J04** (same MEI ASIC and codec,
+**no FM synth**). One ~13 KB `.COM`, three host backends, auto-detected.
 
-Its sibling, the **CF-VEW212 "Sound Card PRO"** (related ASIC, OPL4
+The third family member, the **CF-VEW212 "Sound Card PRO"** (related ASIC, OPL4
 wavetable), is **recognized but deliberately not configured** as of 2.3:
 recon showed its working configurations are not the one its CIS declares
 (see [The cards](#the-cards) below), and this enabler cannot set them
@@ -48,16 +49,24 @@ driver code.
 
 Run it once. In PCIC and OB modes the configuration sticks in the
 controller and the program exits; in CS mode it stays resident and also
-configures the card on hot-plug. Then point your game at **AdLib at 388**:
+configures the card on hot-plug. Then point your game at **AdLib at 388**
+(211; the FM-less J04 offers the WSS codec instead — see below):
 
 ```
 VEW21XGO /T
 ```
 
 With no `/S`, VEW21XGO scans the sockets and configures the first
-CF-VEW211 it finds, tagged `(auto)` in its output. (A card with a
-dead/blank CIS is reported but not configured unless you add `/FORCE`;
-a CF-VEW212 is reported and declined — see above.)
+CF-VEW211 or PC-9801N-J04 it finds, tagged `(auto)` in its output. (A card
+with a dead/blank CIS is reported but not configured unless you add
+`/FORCE`; a CF-VEW212 is reported and declined — see above.)
+
+On a **PC-9801N-J04** the enabler configures the card's single declared
+entry automatically: codec at **`F40` (registers at `F44`)**, no FM window
+(`/IO` is overridden and `/NOFM` is implied — the card has no FM silicon;
+`/T` therefore stays silent, and FMVOL has nothing to do). Point software
+at the WSS codec, or run an SB emulator against it (`SBEBASE=F40` for
+VSBPCMCIA).
 
 ```
 VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
@@ -65,7 +74,8 @@ VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
 
   /IO=hex   codec base — 530 (default) / E80 / F40 / 604 (picks the
             matching COR index; codec registers at base+4, OPL3 always
-            388).
+            388).  The J04 declares only the F40 config: /IO is
+            overridden to F40 for it.
   /I=dec    IRQ to route — 7, 9, 10 or 11 only (level-mode cards;
             default 0 = none, FM needs no IRQ)
   /VOL=dec  DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
@@ -99,6 +109,7 @@ the `.EXE` to avoid confusion).
 |:---:|---|
 | ✅ | **Three host backends in one binary** — direct PCIC, Card Services client (hot-plug TSR), OmniBook Socket Services |
 | ✅ | **CF-VEW212 protected** — recognized by MANFID and declined with an explanation (its working configs are undeclared in its CIS; enabling support is in progress) |
+| ✅ | **NEC PC-9801N-J04 supported** (2.4) — the PC-98 sibling ships a CIS with **no MANFID tuple**, so it is identified by its VERS_1 product string instead; codec-only (no FM), fixed at `F40` |
 | ✅ | **OPL3 FM synthesis** at the standard AdLib port `0x388` — games just work |
 | ✅ | **WSS codec** (CS4231A) at `0x530` / `0xE80` / `0xF40` / `0x604` |
 | ✅ | **Dead-CIS cards recognized** — flagged by their fill signature; configured from built-in knowledge only under `/FORCE`, never written to |
@@ -235,8 +246,10 @@ ear, and the route to catching protected-mode games too — is in
 | | | `0x22` | `0xF40` | `0x388` |
 | | | `0x23` | `0x604` | `0x388` |
 | CF-VEW212 | `0032/0501` | `0x20` (declared) | `0x530` | `0x388` |
+| PC-9801N-J04 | *none* — VERS_1 `"NEC"`, `"PC-9801N-J04"` | `0x22` (sole entry) | `0xF40` | *no FM silicon* |
 
-Config registers (COR + CCSR) live at attribute offset `0x200` on both.
+Config registers (COR + CCSR) live at attribute offset `0x200` on all of
+them.
 The COR reads back with the LevlREQ bit pinned high — these cards only do
 level-mode interrupts, hence the `{7, 9, 10, 11}` IRQ set from the CIS.
 
@@ -246,6 +259,18 @@ player (see `probes/README.md` for the protocol gotchas that make it
 work). **FM has no hardware volume control** on the 211 — the OPL3's
 audio (YMF262 → YAC512 DAC) is summed after the codec, and an exhaustive
 register hunt found nothing that attenuates it (`doc/ASIC.md`).
+
+**The J04 is the family's PC-98 export, minus the FM.** Same MEI ASIC
+and CS4231A codec as the 211, aimed at NEC's PC-98 laptops — where the
+native WSS home is `F40`, which is exactly (and only) what its CIS
+declares: one config entry, COR index `0x22`, I/O `F40–F49` on 10 address
+lines, and **no MANFID tuple**, which is why it is matched by VERS_1
+string. Index `0x22`/`F40` is the *same* config the
+211's table maps to that base — the family decode is shared silicon. No
+FM chip is fitted; the enabler claims no `388` window for it. Digital
+audio and the `#SPKR` host-speaker route both verified on real hardware
+(Toshiba T2130CT, SB emulation via VSBPCMCIA at `SBEBASE=F40`). The
+byte-exact CIS capture is `probes/CIS_PC98_J04.BIN`.
 
 **The 212 is a different animal wearing the 211's CIS.** Its single
 declared config entry is byte-identical to the 211's default — and on

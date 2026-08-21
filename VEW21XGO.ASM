@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.3 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.4 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -297,6 +297,19 @@ ktab:
         dw n_v212
         dw 0, 0                       ; end of table
 
+;--- second-stage manifest: family members whose CIS has NO MANFID tuple
+;--- at all (the NEC J04).  Matched by VERS_1 product string instead.
+;--- record: +0 pattern ptr, +2 flags, +3 name ptr
+K_NOFM   equ 04h                      ; codec only: never claim/probe 388h
+K_FIXF40 equ 08h                      ; single declared config: F40h, idx 22h
+K2REC    equ 5
+k2tab:
+        dw s_j04
+        db K_NOFM | K_FIXF40
+        dw n_j04
+        dw 0                          ; end of table
+s_j04:  db 'PC-9801N-J04',0
+
 ; identify - match [manfid] against the manifest.  CF clear = hit
 ; ([matched]/[k_flags]/[k_name] filled, fixed-base override applied).
 identify:
@@ -341,9 +354,88 @@ identify:
         ret
 .miss:  add  si, KREC
         jmp  .next
-.unk:   pop  ax
+.unk:
+        ;--- no MANFID hit.  A CIS with no MANFID tuple at all can still be
+        ;--- one of ours: the NEC PC-9801N-J04 (PC-98 sibling: same ASIC +
+        ;--- CS4231A, no FM) identifies only by its VERS_1 product string.
+        cmp  word [manfid], 0
+        jne  .nk2
+        cmp  word [verslen], 0
+        je   .nk2
+        push di
+        mov  si, k2tab
+.k2:    cmp  word [si], 0
+        je   .k2end
+        mov  di, [si]
+        call vers_find                ; CF clear = pattern found in versbuf
+        jnc  .k2hit
+        add  si, K2REC
+        jmp  .k2
+.k2end: pop  di
+.nk2:   pop  ax
         pop  si
         stc
+        ret
+.k2hit:
+        mov  al, [si+2]
+        mov  [k_flags], al
+        mov  ax, [si+3]
+        mov  [k_name], ax
+        mov  byte [matched], 1
+        pop  di
+        test byte [k_flags], K_NOFM   ; codec-only: exactly like /NOFM
+        jz   .k2f
+        mov  byte [o_nofm], 1
+        mov  byte [en_fm], 0          ; the plan latched en_fm BEFORE the
+                                      ; CIS was read: clear it here too
+.k2f:   test byte [k_flags], K_FIXF40 ; single-config card: F40h / idx 22h
+        jz   .k2ok
+        cmp  word [o_io], 0F40h
+        je   .k2ok
+        mov  word [o_io], 0F40h
+        mov  byte [coridx], 22h
+        mov  byte [r_iofix], 1        ; note the override in the summary
+.k2ok:  jmp  .ok
+
+; vers_find: is the ASCIIZ pattern at [DI] contained in versbuf?  CF clear
+; = found.  The VERS_1 strings are 0-separated and the pattern has no NULs,
+; so a plain byte scan cannot false-match across a string boundary.
+vers_find:
+        push ax
+        push bx
+        push cx
+        push si
+        mov  cx, [verslen]
+        jcxz .no
+        xor  bx, bx                   ; candidate start offset
+.pos:   mov  si, di
+        push bx
+.cmp:   mov  al, [si]
+        or   al, al
+        jz   .hit                     ; pattern exhausted = match
+        cmp  bx, [verslen]
+        jae  .npos
+        cmp  al, [versbuf+bx]
+        jne  .npos
+        inc  si
+        inc  bx
+        jmp  .cmp
+.npos:  pop  bx
+        inc  bx
+        cmp  bx, cx
+        jb   .pos
+.no:    pop  si
+        pop  cx
+        pop  bx
+        pop  ax
+        stc
+        ret
+.hit:   pop  bx
+        pop  si
+        pop  cx
+        pop  bx
+        pop  ax
+        clc
         ret
 
 ; ---- force_ident: /FORCE identity for an unknown/unreadable card --------
@@ -492,15 +584,18 @@ cs_configure:
         mov  [p_rel], ax
         mov  [p_rirq], ax
 
-        ; ---- CIS identity: MANFID (+ VERS_1 for display) ------------------
+        ; ---- CIS identity: MANFID (+ VERS_1) ------------------------------
+        ; MANFID is OPTIONAL: the NEC J04 has none - VERS_1 identifies it.
+        mov  word [manfid], 0
+        mov  word [manfid+2], 0
         mov  byte [p_tup+4], 20h      ; CISTPL_MANFID
         call tup_get
-        jnc  .midok
-        jmp  .nocard
-.midok: mov  ax, [tdata]
+        jc   .novmid
+        mov  ax, [tdata]
         mov  [manfid], ax
         mov  ax, [tdata+2]
         mov  [manfid+2], ax
+.novmid:
 
         mov  word [verslen], 0        ; CISTPL_VERS_1 strings
         mov  byte [p_tup+4], 15h
@@ -3782,9 +3877,11 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.3 - CF-VEW211 enabler, 212-aware (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.4 - CF-VEW211/J04 enabler, 212-aware (PCIC/CS/OB)',13,10,0
 m_help:
  db 'Enables the Panasonic CF-VEW211 PC Card sound card with no Card',13,10
+ db 'Services needed, and the NEC PC-9801N-J04 (same codec, no FM;',13,10
+ db 'single config: F40h, COR index 22h - /IO is overridden).',13,10
  db 'Services needed (CS4231A WSS codec + OPL3 FM).  The CF-VEW212 is',13,10
  db 'recognized but NOT configured (since 2.3): its working configurations',13,10
  db 'are undeclared in its CIS - support in progress.',13,10,13,10
@@ -3847,8 +3944,8 @@ m_win:     db 'win',0
 m_comma:   db ', ',0
 m_mix:     db '   mixer: DAC -',0
 m_mix2:    db 'dB, Aux1/Aux2 muted (FM sums after the codec)',13,10,0
-m_iofix:   db '   Note: this card has no alternate bases - codec forced'
-           db ' to 530h.',13,10,0
+m_iofix:   db '   Note: this card has one fixed codec base - /IO'
+           db ' overridden.',13,10,0
 m_spkr:    db '   #SPKR audio ON - card mixer routed to host speaker',13,10,0
 m_toned:  db '   TEST: FM tone sent',13,10,0
 ; ---- socket verdicts (PCIC + OB) ----
@@ -3920,6 +4017,7 @@ m_csnoforce: db 'Note: /FORCE is not supported in CS mode - ignored.',13,10,0
 ; ---- names ----
 n_vew:     db 'Panasonic CF-VEW211',0
 n_v212:    db 'Panasonic CF-VEW212 (Sound Card PRO)',0
+n_j04:     db 'NEC PC-9801N-J04 (codec, no FM)',0
 n_dead:    db 'CF-VEW21x (dead CIS)',0
 n_unk:     db 'Unknown card',0
 
