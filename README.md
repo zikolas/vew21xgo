@@ -341,6 +341,20 @@ Either way the signature is patched from `PE` to `PX` afterwards, which
 is what JLOAD accepts. Build it *before* loading JEMM386: JWASMD wants a
 DPMI host and cannot get one once JEMM is resident.
 
+## The wavetable synth (synth/)
+
+OPL4MID (a standalone General MIDI .MID player) and OPL4SYN (the same
+engine as a resident INT 2Fh synth — the /SYNTH sink for
+[MPUSHIM](https://github.com/zikolas/mpushim), which gives DOS games an
+MPU-401 at 330h in every trap world). Both drive the OPL4/YRW801 through
+the FM register window on config index 23h, so digital audio, FM and
+wavetable MIDI run together with no vendor software in the path. The
+instrument tables derive from the ALSA opl4 driver (dual BSD/GPL — see
+synth/README.md for provenance). Build with Open Watcom (wcc -ms, C89);
+an on-box BLD.BAT works.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL v2 — see [LICENSE](LICENSE). The enabler alone was MIT through 2.5;
+the repo moved to GPL v2 when the synth, whose instrument tables derive
+from the GPL/BSD ALSA opl4 driver, moved in.

@@ -87,7 +87,8 @@
 ;
 ;  Build (host or on-box):  nasm -f bin VEW21XGO.ASM -o VEW21XGO.COM
 ;
-;  (C) 2026 zikolas, MIT.  Clean-room provenance: a healthy CF-VEW211's
+;  (C) 2026 zikolas.  GNU General Public License v2 - see LICENSE.
+;  Clean-room provenance: a healthy CF-VEW211's
 ;  own CIS, the public Intel 82365SL register set, the PCMCIA CS/SS specs
 ;  via RBIL61 + the SystemSoft CardSoft technical guide (API binding), HP
 ;  OmniBook 425 Socket Services behavior probed live (es1688go repo,
