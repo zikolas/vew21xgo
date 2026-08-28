@@ -1,7 +1,7 @@
 # vew212-opl4
 
 A General MIDI file player for DOS that drives the OPL4 (Yamaha YMF278B)
-wavetable directly, written for the Panasonic CF-VEW211/212 "Sound Card PRO"
+wavetable directly, written for the Panasonic CF-VEW212 "Sound Card PRO"
 PC Card and its onboard YRW801 sample ROM.
 
 ## Why
@@ -25,7 +25,7 @@ the standard FM base, but has only been tested on the CF-VEW212.
 ## Requirements
 
 - The card enabled on COR index 23h with the OPL4 window at 388-38Dh.
-  On the CF-VEW211/212, run VEW21XGO (github.com/zikolas/vew21xgo) first.
+  On the CF-VEW212, run VEW21XGO (this repo) first - the 211 has no OPL4.
 - Something audible on the card's output. On the 212 the wave/FM mix (DO2)
   is routed into the codec's line input; VEW21XGO unmutes it.
 
