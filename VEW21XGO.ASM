@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.4 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.5 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -29,15 +29,27 @@
 ;    The codec powers up muted; FM does NOT pass through the codec (it sums
 ;    after it, and has no hardware volume - proven exhaustively).
 ;
-;  THE CF-VEW212 "Sound Card PRO" (MANFID 0032/0501): RECOGNIZED BUT
-;  NOT CONFIGURED (since 2.3).  Its CIS declares a single entry
-;  bit-identical to the 211's default - but on real hardware that config
-;  is DEAD (no codec, no FM answer); the card actually runs on config
-;  indexes its CIS never declares (vendor recon: MPU-401 at 330h + OPL4
-;  FM/wave at 388h-38Dh under COR index 26h; a codec config attested by
-;  the Win95 INF - see doc/DUMP212-VND-*.TXT).  Until this enabler can
-;  set those configs properly, a healthy 212 is reported and DECLINED;
-;  /FORCE /S=n still sets the dead declared entry for experimenters.
+;  THE CF-VEW212 "Sound Card PRO" (MANFID 0032/0501): CONFIGURED SINCE
+;  2.5, on COR INDEX 23h - which its CIS never declares.  The single
+;  entry the CIS DOES declare is bit-identical to the 211's default and
+;  is DEAD on real hardware (no codec, no FM answer), which is why 2.3
+;  and 2.4 recognised the card and declined it.
+;    idx 23h gives: codec 530h-539h + OPL4 FM/wave 388h-38Dh, IRQ 9,
+;    both windows autosized (PCIC ioctl 22h).  There is NO MPU window in
+;    this configuration - see the MIDI note below.
+;  !! The index numbering is NOT shared with the 211.  On the 211, idx
+;  23h selects codec base 604h; on the 212 the same number is a wholly
+;  different personality.  Different ASIC, different decode - never
+;  reason from one card's index table to the other's.
+;  The 212's other known personality is idx 26h: MPU-401 at 330h + the
+;  same OPL4 block, but NO codec.  No index known to us enables codec,
+;  FM and MPU together, so MIDI on 330h is unfinished business: either
+;  an index sweep finds a three-function config (probe it with ONE wide
+;  window 330h-38Dh, which stays below the COM1 danger zone), or MIDI
+;  gets rendered on the OPL4 wavetable directly and 330h is presented in
+;  software.  See doc/DUMP212-ENB.TXT for the full recon.
+;  Recipe source: the vendor's own Windows 3.1 DOS enabler SCPROENB.COM,
+;  run and then read back off the hardware - no driver was examined.
 ;
 ;  DEAD-CIS CARDS: the ASIC shadows the CIS in RAM loaded from a 93LC56
 ;  EEPROM; when that load fails the whole tuple region reads one stuck
@@ -96,7 +108,7 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0203h
+VGVER   equ 0205h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
 VBMAX   equ 80h                       ; VERS_1 capture buffer size.  The
@@ -118,6 +130,8 @@ VEW_MANF  equ 0032h                   ; MANFID of an intact CF-VEW211
 VEW_CARD  equ 0001h
 VEW_COR   equ 0200h                   ; config registers base (attribute)
 FM_BASE   equ 0388h                   ; OPL3, present in every configuration
+MPU_BASE  equ 0330h                   ; CF-VEW212 /MIDI: MPU-401, 4 ports
+MIDI_IDX  equ 26h                     ; ... on the 212's other COR index
 
 start:  jmp  init                     ; 3 bytes: sig block lands at 103h
 
@@ -179,6 +193,13 @@ versbuf  times VBMAX db 0             ; VERS_1 strings (0-separated)
 R_LEN    equ $-arg_sock
 
 cbase    dw 0534h                     ; codec register base = [o_io]+4
+is212    db 0                         ; CF-VEW212: needs the line-in un-mute
+o_midi   db 0                         ; /MIDI: hand the 212 to the MPU stack
+mf_save  db 0                         ; winEn saved across the /MIDI flip
+r_midi   db 0                         ; the flip actually happened
+r_mcor   db 0                         ; COR read back after the flip
+fm_end   dw FM_BASE+3                 ; FM window end: +3 OPL3, +5 OPL4 wave
+io_ctl   db 0                         ; PCIC I/O control byte (07h)
 cc_slow  db 0                         ; 1 = ms-paced codec writes (retry)
 
 qcnt     db 0                         ; CS event queue (registration window)
@@ -287,13 +308,14 @@ P_RIRQ_LEN equ 5
 ;==========================================================================
 K_FIX530 equ 01h
 K_UNSUP  equ 02h
+K_212    equ 10h
 KREC     equ 7
 ktab:
         dw VEW_MANF, 0001h
         db 0
         dw n_vew
         dw VEW_MANF, 0501h
-        db K_FIX530 | K_UNSUP
+        db K_212
         dw n_v212
         dw 0, 0                       ; end of table
 
@@ -315,6 +337,9 @@ s_j04:  db 'PC-9801N-J04',0
 identify:
         push si
         push ax
+        mov  byte [is212], 0          ; re-derived every run (CS hot-plug)
+        mov  word [fm_end], FM_BASE+3
+        mov  byte [io_ctl], 0
         mov  si, ktab
 .next:  mov  ax, [si]
         or   ax, [si+2]
@@ -341,7 +366,18 @@ identify:
         stc
         ret
 .frc:   mov  byte [f212], 1           ; note the forced 212 for the summary
-.sup:   test byte [k_flags], K_FIX530 ; fixed-base card: only 530h exists
+.sup:   test byte [k_flags], K_212    ; the 212's REAL, undeclared config
+        jz   .k530
+        mov  byte [coridx], 23h       ; index 23h - the CIS never declares it
+        mov  word [fm_end], FM_BASE+5 ; OPL4: 388h-38Dh, incl. wave pair
+        mov  byte [io_ctl], 22h       ; both windows autosized, as the vendor
+        mov  byte [is212], 1          ; and its OPL4 feeds the codec LINE IN
+        cmp  word [o_io], 0530h
+        je   .ok
+        mov  word [o_io], 0530h       ; only 530h exists on this card
+        mov  byte [r_iofix], 1
+        jmp  .ok
+.k530:  test byte [k_flags], K_FIX530 ; fixed-base card: only 530h exists
         jz   .ok
         cmp  word [o_io], 0530h
         je   .ok
@@ -748,6 +784,7 @@ cs_configure:
         or   al, M_FM
 .mf:    mov  [mapflags], al
         call chip_init
+        call midi_note                ; /MIDI is PCIC-only in this build
         cmp  byte [r_codec], 0
         jne  .alive
         mov  byte [r_stage], 5        ; configured but the codec won't verify
@@ -958,7 +995,17 @@ chip_init:
         pop  ax
         ret
 
-; ---- cc_unmute: DAC L/R at [o_vol]; Aux1/Aux2 muted ---------------------
+; ---- cc_unmute: DAC L/R at [o_vol]; Aux1/Aux2 muted; 212 line-in open --
+;
+;  On the CF-VEW212 the OPL4's analog output is wired into the CODEC'S
+;  LINE INPUT, and that input powers up MUTED - which is why the card is
+;  digitally alive but silent until I18/I19 are opened.  Those two are
+;  MODE2-ONLY registers: I12 bit6 must be set to reach them at all.  The
+;  vendor sets MODE2, writes them, and clears MODE2 again - the un-mute
+;  survives, because MODE2 gates ADDRESSABILITY, not the register
+;  contents.  02h is the vendor's own value: unmuted at +9 dB, which is
+;  compensating for the OPL4's output level - do not "correct" it to a
+;  nominal 0 dB (08h) or the 212's FM lands ~9 dB below the vendor stack.
 cc_unmute:
         push ax
         mov  al, 06h                  ; L DAC out: unmute, -1.5dB * vol
@@ -979,6 +1026,110 @@ cc_unmute:
         mov  al, 05h
         mov  ah, 88h
         call ccput
+        cmp  byte [is212], 0          ; ---- CF-VEW212 only: open LINE IN ----
+        je   .done
+        mov  al, 0Ch                  ; I12 |= MODE2: makes I18/I19 reachable
+        call ccget
+        or   al, 40h
+        mov  ah, al
+        mov  al, 0Ch
+        call ccput
+        mov  al, 12h                  ; I18 L line in: unmute, +9 dB
+        mov  ah, 02h
+        call ccput
+        mov  al, 13h                  ; I19 R line in: unmute, +9 dB
+        mov  ah, 02h
+        call ccput
+        mov  al, 0Ch                  ; I12 &= ~MODE2, as the vendor leaves it
+        call ccget
+        and  al, 0BFh
+        mov  ah, al
+        mov  al, 0Ch
+        call ccput
+.done:  pop  ax
+        ret
+
+;==========================================================================
+;  midi_flip - /MIDI: hand the CF-VEW212 to the vendor OPL4 MIDI stack.
+;
+;  The 212 has exactly two personalities and they are COMPLEMENTARY:
+;    index 23h = codec + OPL4        index 26h = MPU-401 + OPL4
+;  OPL4DRV.COM is an MPU-401 -> wavetable renderer, so it needs 26h.  But
+;  the OPL4's analog output is wired into the CODEC's line input, and that
+;  input powers up muted and is only reachable while a codec-capable index
+;  is set.  Configure 26h from cold and the card is digitally perfect and
+;  audibly DEAD - which is exactly the trap that cost us a week in July.
+;
+;  So this runs LAST, after the ordinary 23h bring-up has already unmuted
+;  the line input: rewrite the COR to 26h, then re-point I/O window 0 from
+;  the codec block to the MPU at 330h.  The mixer KEEPS its values - the
+;  codec stops being addressable, it does not stop working.  Same two-phase
+;  choreography the vendor's own SCPRODOS performs (see doc/DUMP212-ENB).
+;
+;  PCIC backend only for now; /MIDI is refused on CS and OB.
+;==========================================================================
+; midi_note - say so, rather than silently ignoring /MIDI, when the run
+; landed on a backend that cannot perform the flip.  The card is left on
+; the codec config, which is a working configuration - just not the one
+; that was asked for.
+midi_note:
+        cmp  byte [o_midi], 0
+        je   .q
+        cmp  byte [is212], 0
+        je   .q
+        push si
+        mov  si, m_midipc
+        call prstr
+        pop  si
+.q:     ret
+
+midi_flip:
+        push ax
+        push bx
+        push cx
+        push es
+        mov  al, 06h                  ; --- re-open the attribute window
+        call pc_rd                    ;     just long enough for the COR
+        mov  [mf_save], al
+        or   al, 01h                  ;     + mem win0 (start/end/offset
+        mov  ah, al                   ;     regs are still programmed from
+        mov  al, 06h                  ;     the CIS probe; only the enable
+        call pc_wr                    ;     bit was cleared)
+        mov  cx, [o_wseg]
+        mov  es, cx
+        mov  bx, [cfgbase]
+        mov  al, MIDI_IDX             ; plain index; the card pins LevlREQ
+        mov  [es:bx], al
+        mov  ax, 5
+        call ms_delay
+        mov  al, [es:bx]
+        mov  [r_mcor], al
+        mov  ah, [mf_save]            ; --- close it again
+        mov  al, 06h
+        call pc_wr
+        mov  ah, [mf_save]            ; --- both I/O windows OFF before any
+        and  ah, 3Fh                  ;     start/end byte is touched: a
+        mov  al, 06h                  ;     half-written window can span
+        call pc_wr                    ;     ports it must never span
+        mov  al, 08h
+        mov  ah, MPU_BASE & 0FFh
+        call pc_wr
+        mov  al, 09h
+        mov  ah, MPU_BASE >> 8
+        call pc_wr
+        mov  al, 0Ah
+        mov  ah, (MPU_BASE+3) & 0FFh
+        call pc_wr
+        mov  al, 0Bh
+        mov  ah, (MPU_BASE+3) >> 8
+        call pc_wr
+        mov  ah, [mf_save]            ; --- windows back on
+        mov  al, 06h
+        call pc_wr
+        mov  byte [r_midi], 1
+        pop  es
+        pop  cx
+        pop  bx
         pop  ax
         ret
 
@@ -1847,6 +1998,7 @@ ob_got:
         ; ---- I/O windows (politely) + chip ------------------------------
         call ob_map_all               ; degrades/exits internally
         call chip_init
+        call midi_note                ; /MIDI is PCIC-only in this build
 
         mov  al, [o_irq]
         or   al, al
@@ -2494,14 +2646,14 @@ pc_found:
         mov  ah, FM_BASE >> 8
         call pc_wr
         mov  al, 0Eh
-        mov  ah, (FM_BASE+3) & 0FFh
+        mov  ah, [fm_end]
         call pc_wr
         mov  al, 0Fh
-        mov  ah, (FM_BASE+3) >> 8
+        mov  ah, [fm_end+1]
         call pc_wr
 .now1:
-        mov  al, 07h                  ; both windows 8-bit
-        xor  ah, ah
+        mov  al, 07h                  ; I/O control: 0 = 8-bit both windows,
+        mov  ah, [io_ctl]             ; 22h = autosize both (the 212)
         call pc_wr
         mov  ah, 60h                  ; I/O-card mode, reset off
         mov  al, [o_irq]
@@ -2541,18 +2693,34 @@ pc_found:
         mov  [mapflags], al
         call chip_init
 
+        ; ---- /MIDI: second phase, once the line input is already open ----
+        cmp  byte [o_midi], 0
+        je   .nomidi
+        cmp  byte [is212], 0          ; 212 only - no other card has this
+        je   .nomidi
+        call midi_flip
+.nomidi:
+
         ; ---- window list for the summary ---------------------------------
         mov  byte [wcount], 1
         mov  byte [wnum], 0
         mov  ax, [p_w0s]
         mov  [wbase], ax
         mov  word [wsize], 10
+        cmp  byte [r_midi], 0         ; the flip moved win0 to the MPU
+        je   .w0ok
+        mov  word [wbase], MPU_BASE
+        mov  word [wsize], 4
+.w0ok:
         cmp  byte [en_fm], 0
         je   .rep
         mov  byte [wcount], 2
         mov  byte [wnum+1], 1
         mov  word [wbase+2], FM_BASE
-        mov  word [wsize+2], 4
+        mov  ax, [fm_end]             ; 4 ports for an OPL3, 6 for the 212's
+        sub  ax, FM_BASE              ; OPL4 (388h-38Dh) - report what was
+        inc  ax                       ; actually programmed, not a constant
+        mov  [wsize+2], ax
 .rep:
         mov  al, [sock]
         mov  [rep_sock], al
@@ -3346,7 +3514,13 @@ report:
 .cornl:
         call crlf
 .cordone:
-; "   WSS 534   FM 388 OPL3   IRQ 7"
+; "   WSS 534   FM 388 OPL3   IRQ 7"   ("   MPU 330 ..." after /MIDI)
+        cmp  byte [r_midi], 0         ; /MIDI: index 26h exposes the MPU and
+        je   .wss                     ; NOT the codec - 530h+0..9 reads FF,
+        mov  si, m_mpu                ; so naming a WSS base here would be
+        call prstr                    ; reporting a port that is not there
+        jmp  .fmq
+.wss:
         mov  si, m_codec
         call prstr
         mov  ax, [o_io]
@@ -3372,6 +3546,9 @@ report:
         jz   .fmoff
         mov  si, m_fm
         call prstr
+        mov  si, m_opl4               ; the 212's FM core lives inside a
+        cmp  byte [is212], 0          ; YMF278B, and we map its wave pair
+        jne  .fmp
         mov  si, m_opl3
         cmp  byte [r_oplv], 3
         je   .fmp
@@ -3439,6 +3616,10 @@ report:
         jmp  .w5
 .w5nl:
         call crlf
+        cmp  byte [r_midi], 0         ; explain where the audio comes from:
+        je   .w5done                  ; the codec is un-muted but unmapped
+        mov  si, m_midiline
+        call prstr
 .w5done:
 ; mixer detail: verbose only
         cmp  byte [o_verb], 0
@@ -3516,6 +3697,8 @@ parse_args:
         je   .t
         cmp  al, 'N'
         je   .n
+        cmp  al, 'M'
+        je   .midi
         cmp  al, 'F'
         je   .f
         cmp  al, 'W'
@@ -3572,6 +3755,13 @@ parse_args:
 .spkr:
         call swtail
         mov  byte [o_spkr], 1
+        jmp  .loop
+.midi:                                ; /MIDI - the 212's MPU-401 personality
+        call swtail
+        mov  byte [o_midi], 1
+        cmp  byte [o_irq], 0          ; the vendor stack is interrupt-driven;
+        jne  .loop                    ; default its IRQ, still overridable
+        mov  byte [o_irq], 9          ; by an explicit /I=n either side
         jmp  .loop
 .i:                                   ; /IO=hex or /I=dec
         mov  al, [si]
@@ -3877,7 +4067,9 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.4 - CF-VEW211/J04 enabler, 212-aware (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.5 - CF-VEW211/212/J04 enabler (PCIC/CS/OB)',13,10,0
+m_midipc:  db '   /MIDI needs the PCIC backend in this build - card left on the',13,10
+           db '   codec config (index 23h).  Re-run with /PCIC for the MPU.',13,10,0
 m_help:
  db 'Enables the Panasonic CF-VEW211 PC Card sound card with no Card',13,10
  db 'Services needed, and the NEC PC-9801N-J04 (same codec, no FM;',13,10
@@ -3895,6 +4087,11 @@ m_help:
  db '  /T         play a short FM test tone after enabling',13,10
  db '  /SPKR      also route audio to the host speaker (#SPKR pin; mono, harsh)',13,10
  db '  /NOFM      do not claim the 388h FM window',13,10
+ db '  /MIDI      CF-VEW212 only: finish on COR index 26h (MPU-401 at',13,10
+ db '             330h + OPL4) for the vendor OPL4TSR/OPL4DRV wavetable',13,10
+ db '             MIDI stack, instead of the codec.  The line input is',13,10
+ db '             un-muted first, so the OPL4 is still audible.  Implies',13,10
+ db '             IRQ 9 unless /I= says otherwise.  PCIC backend only.',13,10
  db '  /S=dec     socket (PCIC 0-7, OB 1-2; CS: probe only this socket)',13,10
  db '  /W=hex     attribute-window segment for CIS/COR access (PCIC; def D000)',13,10
  db '  /FORCE     configure without the CIS check; REQUIRED for a dead-CIS card',13,10
@@ -3931,6 +4128,10 @@ m_index:   db ' index ',0
 m_corok:   db ' (verified)',0
 m_cormis:  db ' (MISMATCH: readback ',0
 m_codec:   db '   WSS ',0
+m_mpu:     db '   MPU 330',0
+m_opl4:    db 'OPL4',0
+m_midiline: db '   codec un-muted, then unmapped: the OPL4 reaches the jack',13,10
+            db '   through its line input, which is why 530h reads FF here.',13,10,0
 m_noresp:  db ' (NOT RESPONDING',0
 m_fm:      db '   FM 388 ',0
 m_opl3:    db 'OPL3',0
