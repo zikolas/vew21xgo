@@ -1,0 +1,7 @@
+format windows nt dll
+runtime native
+option quiet
+file VEWSPY.obj
+name VEWSPY.DLL
+export ddb.1=_ddb
+option start='_DllMain@12'

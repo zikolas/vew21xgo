@@ -1,0 +1,163 @@
+YRW801 GM program -> wave map - TWO INDEPENDENT SWEEPS, MERGED
+=========================================================================
+probes/VEW2MAP.C on the CF-VEW212, 2026-08-28, vendor DOS stack resident
+(OPL4TSR + SCPRODOS /C330 /M388 /I9 + OPL4DRV), card on COR index 26h.
+For each program a program change and a note go to the MPU-401 at 330h
+and the OPL4's voice registers are read back.  Only the chip's own
+registers are examined - no driver is disassembled.
+
+WHY TWO SWEEPS
+  The tool reports the lowest keyed voice, so where the renderer LAYERS
+  two waves for one program, which one it sees is arbitrary.  Running the
+  sweep twice and diffing turns that weakness into information: a cell
+  that reads the same both times is a single-layer patch, and a cell that
+  differs shows BOTH layers.  A "a/b" entry below means both a and b were
+  observed and both are real.
+
+RESULTS
+  128 programs, 640 cells, 0 silent probes.
+  91 programs identical across both runs - single layer, trustworthy.
+  37 programs differ - LAYERED, and the pair names both waves.
+  No wave above 383 is ever used, confirming that 384-511 need external
+  memory this card does not have.
+
+READING IT
+  A number changing across a row is a MULTISAMPLE KEY SPLIT, e.g.
+  program 0 walking 300 302 304 306 308 up the keyboard.  Programs
+  sharing a sequence draw on the same multisample bank.  Program 62
+  resolves to {211,212,213,214,215} layered with {280,282,284,286,288}.
+
+CAVEAT - THE DRUM MAP IS NOT HERE AND IS UNSOLVED.  Channel 10
+percussion plays to the end of its sample whatever the note-off says, so
+every note reports the same stale voice.  Two attempted fixes made it
+worse; see the VEW2MAP.C header before trying again.
+
+prog | n36      n48      n60      n72      n84
+   0 | 300      302      304      306      308      
+   1 | 300      301      303      305      307      
+   2 | 108/300  108/301  108/303  305      108        LAYERED
+   3 | 300      302      304      306      308      
+   4 | 108/11   108/11   11/108   11/108   11/108     LAYERED
+   5 | 300      302      304      306      307      
+   6 | 128      128      129      131      132      
+   7 | 39       39       39       39       40       
+   8 | 43       43       43       43       43       
+   9 | 243      243      243      243      243      
+  10 | 257      243      257/243  243/257  243/257    LAYERED
+  11 | 257      257      257      257      257      
+  12 | 244      244      244      245      245      
+  13 | 310      310      310      310      310      
+  14 | 255      255      255      255      255      
+  15 | 64/63    64/63    63/64    64/63    64/63      LAYERED
+  16 | 142      142      142      142      142      
+  17 | 140      140      141      141      141      
+  18 | 296      296      297      298      299      
+  19 | 135      136      138      139      139      
+  20 | 172      172      172      172      173      
+  21 | 112      112/6    6        6/112    7/112      LAYERED
+  22 | 112      112      112      112      112      
+  23 | 172/65   65/172   172/65   172/65   65/173     LAYERED
+  24 | 179      183      181      182      182      
+  25 | 12       12       14       15       15       
+  26 | 90       90       91       92       92       
+  27 | 97       96       98       100      102      
+  28 | 104      104      104      104      104      
+  29 | 165      165      165      166      166      
+  30 | 81       83       86       89       89       
+  31 | 94       94       94       93       95       
+  32 | 4        4        5        5        5        
+  33 | 75       77       77       77       77       
+  34 | 80       105      105      106      106      
+  35 | 78       78       78       78       78       
+  36 | 163      163      163      163      163      
+  37 | 162      162      162      162      162      
+  38 | 190      190      190      190      190      
+  39 | 279      279      279      279      279      
+  40 | 261      261      258      266      265      
+  41 | 259      259      258      266      265      
+  42 | 274      275      277      276      276      
+  43 | 272      273      273      273      273      
+  44 | 176      176      53       52       175      
+  45 | 184      184      187      186      188      
+  46 | 126      126      126      127      127      
+  47 | 256      256      256      256      256      
+  48 | 316      316      318      319      320      
+  49 | 176      176      53       52       175      
+  50 | 2/174    2/174    174/2    2/174    174/2      LAYERED
+  51 | 2        2        2        2        2        
+  52 | 24       24       25       27       27       
+  53 | 41       41       41       41       41       
+  54 | 42       42       42       42       42       
+  55 | 73       73       73       73       73       
+  56 | 246      246      246      247      249      
+  57 | 240      240      241      242      242      
+  58 | 133      134      134      134      134      
+  59 | 177      177      177      178      178      
+  60 | 124      124      124      124      125      
+  61 | 252      252      252      253      253      
+  62 | 211/280  282/212  284/213  214/286  288/215    LAYERED
+  63 | 280/292  282/292  292/284  286/292  288/292    LAYERED
+  64 | 227      227      227      229      231      
+  65 | 146      146      147      148      149      
+  66 | 233      233      237      238      239      
+  67 | 223      225      224      224      224      
+  68 | 66       66       66       67       69       
+  69 | 60       60       59       61       61       
+  70 | 58       57       57       57       57       
+  71 | 158      158      160      159      161      
+  72 | 113      113      113      114      116      
+  73 | 113      113      113      114      115      
+  74 | 189      189      189      189      189      
+  75 | 119      119      119      119      119      
+  76 | 119/293  293/119  293/119  119/293  293/119    LAYERED
+  77 | 118/171  118/171  171/118  118/171  171/118    LAYERED
+  78 | 170      170      170      170      170      
+  79 | 170      170      170      170      170      
+  80 | 204      205      202      207      206      
+  81 | 280      282      284      286      288      
+  82 | 170/118  170/118  170/118  118/170  118/170    LAYERED
+  83 | 254/314  314/254  254/314  314/254  254/314    LAYERED
+  84 | 165/280  165/282  284/165  286/166  288/166    LAYERED
+  85 | 170/42   170/42   170/42   42/170   170/42     LAYERED
+  86 | 2/280    282/2    2/284    2/286    288/2      LAYERED
+  87 | 279/280  279/282  284/279  286/279  288/279    LAYERED
+  88 | 2/243    243/2    2/243    243/2    2/243      LAYERED
+  89 | 78/41    41/78    41/78    41/78    78/41      LAYERED
+  90 | 280/292  282/292  292/284  286/292  292/288    LAYERED
+  91 | 24/42    42/24    42/25    27/42    27/42      LAYERED
+  92 | 257/170  170/257  170/257  170/257  257/170    LAYERED
+  93 | 63/12    12/63    63/14    15/63    15/63      LAYERED
+  94 | 42/292   42/292   42/292   292/42   292/42     LAYERED
+  95 | 211      212      213      214      215      
+  96 | 323/78   323/78   78/323   78/323   78/323     LAYERED
+  97 | 243/2    243/2    243/2    2/243    243/2      LAYERED
+  98 | 243/109  110/243  243/111  243/111  111/243    LAYERED
+  99 | 179/2    183/2    2/181    2/182    2/182      LAYERED
+ 100 | 42/311   311/42   42/311   311/42   42/311     LAYERED
+ 101 | 9/2      2/9      2/9      2/9      9/2        LAYERED
+ 102 | 292/42   292/42   42/292   292/42   42/292     LAYERED
+ 103 | 2/12     12/2     14/2     2/15     2/15       LAYERED
+ 104 | 271      271      271      271      271      
+ 105 | 19       19       18       23       22       
+ 106 | 270      270      270      270      270      
+ 107 | 169      169      169      169      169      
+ 108 | 311      311      311      311      311      
+ 109 | 164      167/164  168      168      168        LAYERED
+ 110 | 261      261      258      266      265      
+ 111 | 65       65       65       65       65       
+ 112 | 311/243  243/311  243/311  311/243  243        LAYERED
+ 113 | 11       11       11       11       11       
+ 114 | 254      254      254/256  254/256  254        LAYERED
+ 115 | 44       44       44       44       44       
+ 116 | 62       62       62       62       62       
+ 117 | 199      199      199      199      199      
+ 118 | 38       38       38       38       38       
+ 119 | 49       49       49       49       49       
+ 120 | 312      312      312      312      312      
+ 121 | 293      293      293      293      293      
+ 122 | 8/55     55/8     8        8        8/55       LAYERED
+ 123 | 9        9        9        9        9        
+ 124 | 3        3        3        3        3        
+ 125 | 1        1        1/55     1        1/55       LAYERED
+ 126 | 54       54       54       54       54       
+ 127 | 313      313      313      313      313      

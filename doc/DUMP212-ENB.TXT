@@ -1,0 +1,460 @@
+CF-VEW212 live-state snapshot -- card configured by the VENDOR WINDOWS 3.1
+DOS ENABLER, SCPROENB.COM V1.0 L12 (C:\SOUNDDRV\CFVEW212\DOSV\).
+Captured 2026-08-26 on the PC110 with probes/VEW2DUMP.C.
+
+SCPROENB takes NO command-line options; its banner states the whole
+configuration it applies:
+
+    Sound Card PRO Enabler (P)  V1.0 L12
+    IO Port: 530,  388
+    IRQ Channel:  9
+
+This is the CODEC personality -- the one the CIS never declares and that
+a month of index guessing never found.  COR index 0x23.
+
+=========================================================================
+PASS 1 -- read-only (no card writes)
+=========================================================================
+pcic 00: 83 7F F1 E9 00 00 E0 22 30 05 39 05 88 03 8D 03
+pcic 10: CC 80 CC 00 34 7F 01 01 00 00 00 00 00 00 00 80
+pcic 20: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08
+pcic 30: 00 00 00 00 00 00 00 00 00 00 B2 00 00 00 00 00
+decoded: IFstat=7F pwr=F1 intctl=E9 (IRQ 9, I/O mode) csc=00 winEn=E0 ioctl=22
+  ioctl bits: win0 8bit+autosz / win1 8bit+autosz
+  io win0 0530-0539 en=1   win1 0388-038D en=1
+attr 200-21E: 63 08 FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+(cis check: 01 02 00 FF)
+io 530+0..9: 04 04 04 04 13 02 CC 80 A0 00
+io 388-38F : 00 FF FF FF FF FF FF FF
+io 331 (MPU stat): FF
+
+=========================================================================
+PASS 2 -- with /CODEC (I/O-space index writes only, restored)
+=========================================================================
+codec IAR=0C I12=CA (MODE2 on)
+codec I0-I15 : 00 00 88 88 88 88 80 80 00 08 00 00 CA 00 00 00
+codec I16-I31: 00 00 02 02 00 00 00 00 00 A0 A0 00 00 00 00 00
+
+=========================================================================
+WHAT IT MEANS
+=========================================================================
+CONFIG (the recipe to replicate):
+  COR (attr 0x200) = 0x63  ->  bit6 LevIREQ | config index 0x23
+  CCSR (attr 0x202) = 0x08
+  attr 0x204+ = FF (floating -- the 211's vendor regs do not exist here)
+  PCIC: pwr F1, intctl E9 (IRQ 9, I/O mode), winEn E0, ioctl 22
+        io win0 0530-0539 (codec, 10 ports)
+        io win1 0388-038D (OPL4 FM 388-38B + wave pair 38C/38D)
+        NO MPU window -- 331 reads FF.  Matches the Win95 INF's "no MPU".
+
+  Index 0x23 was never tried.  Previously known: 0x20 declared-but-dead,
+  0x26 = MPU+OPL4 (the DOS stack), 0x10 = the aliased 8-register ASIC bank.
+
+THE CODEC IS REAL, AND IT IS A CS4231A:
+  IAR at 530+4 = 534, IDR 535, status 536, PIO 537 -- the standard
+  MS Sound System offset-4 layout, same as the CF-VEW211.
+  I12 = 0xCA -> MODE2 set (bit6) over an 0x8A chip id, low nibble A.
+  I25 = 0xA0 -> CS4231A version id.
+  So the 212 carries the SAME codec family as the 211, which puts the
+  whole existing VEW211 CS4231A backend in play for this card.
+
+THE ANALOG GATE, CONFIRMED FROM THE OTHER DIRECTION:
+  I18/I19 = 0x02 -- LINE inputs UNMUTED, gain 2.
+  I6/I7   = 0x80 -- DAC outputs MUTED.
+  I2..I5  = 0x88 -- Aux1/Aux2 MUTED.
+  Line-in is the ONLY open path, exactly as the VEWSPY golden trace of
+  SCPRODOS predicted: the OPL4's analog output is wired into the codec's
+  line input, and everything else stays shut.  Two independent vendor
+  programs, two different personalities, same three-register unmute.
+
+CODEC IDLE STATE (not playing):
+  I8 = 0x00 (8-bit unsigned mono, XTAL1, 8 kHz -- reset default)
+  I9 = 0x08 (ACAL on; playback and capture both disabled)
+  I8's value here is the power-on default, so it says nothing about
+  which crystals are actually fitted.  That still needs a PCB photo or
+  an empirical rate sweep (cf. the SCP-55 XTAL2 lesson).
+
+=========================================================================
+MIXER / VOLUME STATE -- DECODED, AND THE DELTA vs THE CF-VEW211
+=========================================================================
+Side by side with the 211's own vendor dump (doc/DUMP-VND.TXT):
+
+  reg           211 vendor   212 vendor
+  I0  ADC L        00           00      source=Line, gain 0
+  I1  ADC R        00           00
+  I2  Aux1 L       88           88      MUTED, level 0 dB
+  I3  Aux1 R       88           88
+  I4  Aux2 L       88           88      MUTED, level 0 dB
+  I5  Aux2 R       88           88
+  I6  DAC  L       80           80      MUTED, attenuation 0
+  I7  DAC  R       80           80
+  I8  Fs/format    00           00      8-bit unsigned mono, XTAL1, 8 kHz
+  I9  iface cfg    08           08      ACAL on, play+capture disabled
+  I10 pin ctl      00           00      XCTL1/XCTL0 both LOW, IEN off
+  I12 misc         8A           CA      <-- 212 has MODE2 (bit6) SET
+  I13 loopback     00           00      off
+  I18 Line L       88           02      <-- 211 MUTED / 212 UNMUTED +9 dB
+  I19 Line R       88           02      <-- 211 MUTED / 212 UNMUTED +9 dB
+  I25 version      A0           A0      CS4231A (read-only)
+  I26 mono I/O     A0           A0      mono input muted, attenuation 0
+  all others       00           00
+
+**THE TWO CARDS ARE BYTE-IDENTICAL EXCEPT I12 AND I18/I19.**  That is the
+whole difference between them, and it explains both cards at once:
+
+ - The 211's FM is an OPL3 that sums into the codec the normal way, so its
+   vendor never touches the line input and leaves it muted.
+ - The 212's OPL4 is wired into the codec's LINE INPUT, so its vendor must
+   unmute it -- AND BOOST IT +9 dB, not merely open it at 0 dB.
+ - I18/I19 are MODE2-ONLY registers.  I12 bit6 is therefore not decoration:
+   setting MODE2 is what makes the line-input registers addressable at all.
+   That is why the vendor sequence writes I12 first.  The 211's vendor never
+   needed MODE2 because it never needed I18/I19.
+
+FOR OUR ENABLER -- the 212 delta over the existing 211 setup is 3 writes:
+
+    I12 |= 0x40      MODE2 on   (REQUIRED FIRST -- gates I18/I19)
+    I18  = 0x02      line L unmuted, +9 dB
+    I19  = 0x02      line R unmuted, +9 dB
+
+  Replicate 0x02 EXACTLY.  Unmuting at a nominal "0 dB" (0x08) would leave
+  the 212's FM about 9 dB quieter than the vendor stack.  The boost is
+  deliberate -- it is compensating for the OPL4's analog output level.
+
+FOR DIGITAL AUDIO (VSBPCM / the CS4231A backend) ADD:
+
+    I6/I7  unmute (bit7 clear) with a chosen attenuation.
+  The vendor NEVER unmutes the DAC on either card, because neither vendor
+  stack plays through it -- so this write has no vendor precedent to copy.
+  For reference our own 211 bring-up (doc/DUMP-OUR.TXT) runs I6/I7 = 0x18,
+  i.e. -36 dB, which is heavily attenuated.
+  Attenuation encoding: I6/I7 bits 5:0, 0x00 = 0 dB, 1.5 dB per step.
+  Level encoding, I2-I5 and I18/I19: bits 4:0, 0x00 = +12 dB, 1.5 dB per
+  step down, so 0x08 = 0 dB and 0x1F = -34.5 dB.
+
+UNTESTED LEVER: I10 (pin control) reads 00 on BOTH cards, so XCTL0/XCTL1
+are held low.  If either card hangs an external analog switch off those
+pins, nothing we or the vendor has done would have exercised it.
+
+=========================================================================
+PASS 3 -- AFTER WINDOWS 3.1 + THE VENDOR SCPRO.DRV (2026-08-26)
+=========================================================================
+Booted Win 3.1 with scpro.drv installed as MIDI/WAVE/AUX/MIXER and
+vscpro.386 in [386Enh] (vadlibd.386 parked -- it virtualises 388-38B,
+the 212's own OPL4 window).  Card enabled by SCPROENB first, since
+Win 3.1 has no PCMCIA support.  Played a WAV and a MID, exited Windows,
+dumped immediately.
+
+io 530+0..9: 04 04 04 04 0C 8A CC 80 80 00
+io 388-38F : 00 00 FF 00 FF 6C FF FF
+codec IAR=0C I12=8A (MODE2 off - peeking)
+codec I0-I15 : 00 00 10 10 8F 8F 10 10 07 04 00 00 8A FC 05 5F
+codec I16-I31: 00 00 02 02 00 00 00 00 00 A0 A0 00 00 00 00 00
+
+  reg          scproenb   after Windows
+  I2/I3 Aux1     88 88      10 10    <-- UNMUTED, -12 dB
+  I4/I5 Aux2     88 88      8F 8F    <-- still muted (level -10.5 dB)
+  I6/I7 DAC      80 80      10 10    <-- UNMUTED, -24 dB  *** THE VALUE ***
+  I8  Fs/format  00         07       <-- 8-bit mono 22050 Hz on XTAL2
+  I9  iface cfg  08         04       <-- ACAL off, SDC (single DMA ch) on
+  I12 misc       CA         8A       <-- MODE2 turned back OFF
+  I13 loopback   00         FC       <-- LBE=0, loopback still disabled
+  I14/I15 count  00 00      05 5F    <-- 0x055F = a real playback count
+  I18/I19 Line   02 02      02 02    <-- UNCHANGED, survives MODE2 going off
+  attr 0x200     63         63       <-- config UNTOUCHED by Windows
+
+*** THE CRYSTAL QUESTION, ANSWERED FROM THE REGISTER ***
+  I8 = 0x07 = 0000 0111
+     bits 7:5 = 000  -> 8-bit unsigned linear
+     bit    4 = 0    -> mono
+     bits 3:1 = 011  -> rate select 3
+     bit    0 = 1    -> CLOCK SOURCE = XTAL2 (16.9344 MHz)
+  Rate select 3 on XTAL2 = 22050 Hz.
+  So the vendor's own wave driver picks an XTAL2-column rate.  The 212 is
+  NOT a single-crystal board stuck in the XTAL1 column -- the 22.05k/44.1k
+  family is available.  This is the opposite of the SCP-55 situation.
+  ⚠ NECESSARY BUT NOT SUFFICIENT: the register only proves the DRIVER chose
+  XTAL2.  If that crystal were absent the codec would still latch the bits
+  and simply play at the wrong pitch.  The proof is the EAR -- the WAV
+  must have played at correct speed.  Confirm before trusting the column.
+
+*** THE DAC ATTENUATION WE HAD NO PRECEDENT FOR ***
+  I6/I7 = 0x10 = 16 steps x 1.5 dB = -24 dB.
+  Our own 211 bring-up (doc/DUMP-OUR.TXT) uses 0x18 = -36 dB, i.e. we run
+  12 dB quieter than the vendor's own choice.  Worth matching.
+
+*** MODE2 IS TRANSIENT ***
+  Windows set MODE2, programmed I18/I19, then turned MODE2 back OFF -- and
+  the line-in unmute PERSISTED (I18/I19 still read 02).  So the enabler can
+  do the same: MODE2 on, write I18/I19, MODE2 off.  The unmute is sticky;
+  MODE2 only gates ADDRESSABILITY of those registers, not their contents.
+
+*** NEW, AND UNEXPLAINED ***
+  Windows UNMUTES Aux1 (I2/I3 = 0x10, -12 dB) and leaves Aux2 muted.
+  Neither DOS stack touches Aux1 at all.  What is wired to Aux1 on this
+  board is unknown -- if it carries anything audible, our enabler should
+  open it too.  OPEN QUESTION.
+  I9's SDC bit (single DMA channel) is set, though no DMA channel is
+  assigned in the PCIC config -- likely just part of the driver's init.
+
+*** MIDI / OPL4 ***
+  388-38F went from FF FF at the wave pair to 38D = 0x6C: the OPL4 wave
+  data port returns real data, so the Windows MIDI driver initialised the
+  wavetable.  (In July, 38D churning during playback was the proof of life
+  for the wave section.)
+
+*** AND THE POINT THAT MATTERS MOST FOR THE ENABLER ***
+  attr 0x200 still reads 0x63 after a full Windows session.  Windows did
+  NOT reconfigure the card -- it used the personality SCPROENB set.  So
+  config index 0x23 serves BOTH the DOS wave/FM stack and the Windows
+  wave+MIDI stack.  One personality covers everything we want.
+
+=========================================================================
+PASS 4 -- OPL4 WAVE REGISTER FILE (probes/VEW2WAVE.C, new 2026-08-26)
+=========================================================================
+VEW2DUMP cannot see the wave section: those registers sit behind the
+index/data pair at 38C/38D.  VEW2WAVE walks that file.
+
+*** THE NEW2 GATE -- READ THIS BEFORE TRUSTING ANY WAVE DUMP ***
+  The wave file only answers when the OPL3-side NEW2 bit is set (FM bank 1
+  reg 05h via 38A/38B).  With it CLEAR, every wave register reads back the
+  SAME CONSTANT -- the first run of this tool returned 0x40 for all 256
+  registers and DevID 0x40, which looks exactly like a dead chip and is
+  not.  Opening the gate (38A<-05, 38B<-03) turned DevID into 0x20 and the
+  whole file into real data.
+  ⚠ A UNIFORM WAVE DUMP IS THE GATE, NOT A DEAD CHIP.
+  VEW2WAVE therefore defaults to touching NOTHING and reporting whether
+  the gate is already open; /NEW opens it, dumps, and restores NEW=0
+  (compat mode -- OPL2-era games go silent if NEW is left on).
+
+*** STRUCTURAL PARALLEL WORTH REMEMBERING ***
+  NEW2 gates ADDRESSABILITY of the wave registers, not their CONTENTS --
+  the channel data below survived the gate being closed.  That is exactly
+  how MODE2 behaves on the codec side for I18/I19.  Both halves of this
+  card hide their interesting registers behind a mode bit whose state does
+  not survive, while the register contents do.
+
+BASELINE, taken at the DOS prompt after the Windows 3.1 + scpro.drv
+session in which CANYON.MID played (no reboot in between):
+
+wave 00: FF FF 20 1F FF FE -- FF 2A 2F 2A AA 24 31 F3 4A
+wave 10: 2A 31 24 1C 1B 2A 11 AA F3 11 31 D1 30 31 AA AA
+wave 20: 3A A5 0E EA 9B 88 76 36 16 F1 C3 7B 97 3A 5E EA
+wave 30: 76 5E 27 EA E9 87 46 0C E7 08 F1 D5 F3 FE F3 00
+wave 40: D4 FC F1 06 10 F7 FE E5 03 FE 08 FD FC FE E0 C3
+wave 50: 6B 57 6B A1 89 41 47 35 6B 6B 87 8D 8D 6B 47 A1
+wave 60: BB 4B 6F 55 67 61 A1 A1 40 40 40 40 41 62 40 40
+wave 70: 40 40 41 41 41 40 60 40 40 60 40 60 40 40 40 40
+wave 80: 29 20 29 2E 22 00 28 18 29 20 22 23 23 29 00 2E
+wave 90: 28 00 20 00 20 20 2E 2E F0 F2 F0 90 E5 F0 F6 F6
+wave A0: F0 F2 E5 F2 F2 F0 F0 90 F6 F0 F2 F0 F2 F2 90 90
+wave B0: 05 14 05 00 23 05 25 14 05 14 23 22 22 05 00 00
+wave C0: 25 00 14 05 14 14 00 00 0A 08 0A 0A 08 05 25 09
+wave D0: 0A 08 08 07 07 0A 06 0A 25 06 08 05 08 08 0A 0A
+wave E0: 00 00 00 00 00 00 00 00 00 00 00 01 01 00 00 00
+wave F0: 00 00 00 00 00 00 00 00 12 00 FF FF FF FF FF FF
+
+  MIX: F8 (FM)  = 0x12 -> FM ->DO1 2, FM ->DO2 2
+       F9 (PCM) = 0x00 -> PCM->DO1 0, PCM->DO2 0   (power-on default)
+  ⚠ F8 is NOT the 0x1B power-on default, so something set it: the FM path
+  was turned UP one step on each output.  Note the Windows panel was on
+  "PCM" synthesis type at the time and FM was NOT muted in the mix --
+  which suggests the PCM/FM/Both selector is a DRIVER-LEVEL routing
+  decision (which engine renders which MIDI channel) rather than a chip
+  mix change.  PREDICTION TO TEST, not a conclusion.
+
+  All 24 PCM channels carry real YRW801 patch assignments, keys off:
+    ch  tone  TL  pan     ch  tone  TL  pan
+     0   314  32   9      12   151  32   3
+     1   165  32   0      13   314  32   9
+     2   270  32   0*     14    94  48   0
+     3   490  32  14      15   490  32  14
+     4   411  32   2      16   374  32   8
+     5   136  49   0      17    94  48   0
+     6   374  32   8      18    39  32   0
+     7    54  32   8      19   490  48   0
+     8    22  32   9      20   233  32   0
+     9   241  32   0      21   135  32   0
+    10   451  32   2      22    70  32  14
+    11   123  32   3      23   268  32  14
+  (* ch2 panpot reads 9 in the raw dump; transcription above condensed.)
+  This is the residue of CANYON.MID -- the vendor driver's voice
+  allocation, left in the chip.  It is also the honest proof the wavetable
+  was in use.
+
+*** CORRECTION TO PASS 3 ***
+  Pass 3 read "38D = 0x6C" as evidence the wave interface was live.  That
+  was a RAW read of the data port with an unknown address latched, and we
+  now know a closed gate returns a constant, so a non-FF byte there proves
+  little on its own.  The real evidence that the OPL4 wavetable ran is
+  this loaded channel table plus CANYON.MID audibly playing as wavetable.
+
+*** THE MODE DIFF, NOW RUNNABLE ***
+  In Windows set Synthesis Type, exit, then:  VEW2WAVE /NEW > WAVExxx.TXT
+  Three runs (PCM / FM / Both) and diff.  Watch F8/F9 first, then the
+  per-channel tone and TL columns for which engine owns which channel.
+
+=========================================================================
+PASS 5 -- THE PCM / FM / BOTH MODE DIFF (2026-08-26)
+=========================================================================
+Three dumps, Synthesis Type set in the vendor's OPL4 Synthesizer Control
+panel, Windows exited between each: WAVEPCM.TXT, WAVEFM.TXT, WAVEBOTH.TXT.
+
+*** RESULT 1 (SOLID): THE SELECTOR DOES NOT TOUCH THE CHIP MIX. ***
+  F8 = 0x12 and F9 = 0x00 in ALL THREE MODES, byte-identical.
+  So "PCM / FM / Both" is NOT a mix-control change.  The FM path is not
+  muted in PCM mode and the PCM path is not muted in FM mode -- at the
+  chip level both outputs stay open at FM 2/2 and PCM 0/0 throughout.
+  ⇒ The prediction recorded in pass 4 is CONFIRMED: the selector is a
+  DRIVER-LEVEL routing decision about which engine renders which MIDI
+  channel, done in software.
+  ⇒ FOR OUR OWN RENDERER: set F8/F9 once and make the engine choice in
+  software.  There is no chip-side mode to replicate.
+
+*** RESULT 2 (SOLID): THE PCM VOICE TABLE IS MAINTAINED IN EVERY MODE. ***
+  All 24 PCM channel slots carry real patch assignments in all three
+  dumps, FM mode included, and no channel is keyed on in any of them
+  (expected -- nothing was sounding at exit).  So the selector does not
+  disable the wave section at the register level either.
+
+*** RESULT 3 (RESOLVED, AND IT IS A NON-RESULT): THE PATCH SPREAD IS NOISE ***
+  CONFIRMED by ear at the bench: portions of CANYON.MID were played in EVERY mode
+  before exiting.  So each dump is a snapshot of a LIVE, DYNAMIC voice
+  allocator caught at an arbitrary stopping point in the music.  Three
+  snapshots taken at three different moments cannot be compared against
+  each other -- the tone/TL/pan spread records WHERE PLAYBACK STOPPED,
+  not anything about the synthesis mode.
+  ⚠ The "variety collapses in PCM mode" reading below is WITHDRAWN.  It
+  was an artifact of the procedure, not a finding.  Falsification test if
+  it is ever worth revisiting: run the SAME mode twice, stopping at
+  different points -- the tables will differ, which is the whole story.
+  What survives the retraction is Result 1 and Result 2, which are
+  register-level invariants and do not depend on timing at all.
+
+*** (WITHDRAWN -- kept only so the raw numbers stay on record) ***
+  Distinct tone numbers across the 24 slots:
+    PCM  mode:  7   {26, 38, 59, 61, 208, 282, 385}
+    FM   mode: 19
+    Both mode: 21
+    (DOS baseline, pass 4, for reference: ~20)
+  A small set repeated across many slots is what active polyphony
+  allocation looks like -- one instrument spread over several voices.
+  A wide set looks like a stale table nobody is rewriting.  That reading
+  fits PCM mode driving the wave engine and FM mode leaving it alone, but
+  it does NOT explain "Both" also being wide, and it depends entirely on
+  what was actually played in each mode before exiting.  DO NOT BANK THIS
+  until the procedure is confirmed.
+
+  Per-slot tables (tone / TL / pan, all keys off):
+    ch   PCM         FM          Both
+     0   385 32  0   408 32  9   419 48  3
+     1    59 32  0    77 32  2   149 32  0
+     2   208 49  9   226 39  8   136 49  0
+     3   282 49  9   456 39  9   311 32  2
+     4    26 49  9   149 32  0   149 32  0
+     5   282 49  9   208 49  9    26 49  9
+     6   385 32  0   217 32  0   226 39  8
+     7   208 49  9   172 54  0   472 32 14
+     8    26 49  9   199 32  3   196 32 14
+     9    38 49  9    31 32  0   461 32  2
+    10   208 49  9   385 32  0    77 32  2
+    11   385 32  0   461 32  2    94 48  0
+    12    38 49  9   196 32 14   282 49  9
+    13    61 32  0   419 32  3   208 49  9
+    14    59 32  0   444 32  8   196 32  9
+    15   282 49  9   208 49  9   408 32  9
+    16    26 49  9   339 32  0    38 49  9
+    17    61 32  0    54 32  8   282 49  9
+    18    61 32  0   196 32  9   172 54  0
+    19    38 49  9   311 32  2    35 48  3
+    20    26 49  9   472 32 14   182 48  0
+    21   208 49  9   385 32  0   385 32  0
+    22   385 32  0   385 32  0   199 48  3
+    23    59 32  0   149 32  0    31 32  0
+  TL values cluster on 32/39/48/49/54 and panpots on {0,2,3,8,9,14}
+  consistently across all three dumps, which is good evidence these are
+  real registers rather than bus residue.
+
+=========================================================================
+CORRECTION 2026-08-26 -- "index 23h has no MPU" WAS NOT MEASURED
+=========================================================================
+Pass 1/2 recorded "io 331 (MPU stat): FF" and this file drew "NO MPU
+window -- 331 reads FF" from it.  That inference is WRONG and is
+withdrawn.  The windows in force were 530-539 and 388-38D; there was no
+window at 330h, so the host never routed 331 to the card and the FF is
+open bus.  Nothing was measured about the MPU.
+
+The remaining basis was SCPROENB's banner, "IO Port: 530, 388".  That
+states what the vendor's ENABLER REQUESTS, not what the ASIC DECODES --
+and the two have every reason to differ here, because the Windows 3.1
+driver renders MIDI on the OPL4 itself and would never need an MPU
+window even on a card that provides one.
+
+So index 23h may already be a three-function personality.  Untested.
+
+THE TEST, and it needs no wide window: I/O windows are host-side, so
+re-point them with the card's config left alone.  Set index 23h once,
+then
+  pass A: win1 = 388-38D  -> probe codec 534 and OPL status 388
+  pass B: win1 = 330-333  -> probe codec 534 and MPU status 331
+Narrow 330-333 also keeps clear of LPT1, see below.  Known-good MPU
+signature from the vendor's own index 26h: 331 reads 0xBF, and a RESET
+is answered with 0xFE.
+
+AND A SECOND WINDOW HAZARD, if a wide 330-38D ever ships: that span
+contains 0x378-0x37F = LPT1.  The PCIC would claim those ports and drive
+card cycles at the parallel port.  Not fatal the way spanning COM1 is,
+but check whether the host decodes 378h first.
+
+=========================================================================
+PASS 6 -- IS 330h DECODED UNDER INDEX 23h?  (2026-08-26, ANSWERED: NO)
+=========================================================================
+Clean no-CS boot on the PC110 (Socket Services, Card Services and
+OPL4TSR all out of CONFIG.SYS -- VEW2TRY drives the PCIC directly and a
+CS poller on the index register is a race it must not run against).
+Tool: VEW2TRY /CODEC /MPU, which brings the card up, then re-points I/O
+window 1 from the OPL4 block to 330-333 and probes.  Windows are
+host-side, so the card's configuration is untouched by the move; the
+window's enable bit is cleared before its start/end regs are rewritten.
+
+  VEW2TRY /COR=63 /CODEC /MPU     (index 23h)
+    COR <- 63, reads back 63 (latched)
+    PCIC: intctl=E9 ioctl=22 winEn=E0 win0=0530-0539 win1=0388-038D
+    codec 534: IAR=40  I12=8A (CS4231A ALIVE)
+    codec unmute: 12 of 12 registers verified
+    OPL timer detect: pre=00 post=C0 -> FM ALIVE
+    OPL4 wave DevID (38C/38D reg 2): 20 -> YMF278B WAVE ALIVE
+    win1 -> 0330-0333:  MPU status 331: FF -> nothing there
+
+  VEW2TRY /COR=66 /CODEC /MPU     (index 26h -- THE POSITIVE CONTROL)
+    COR <- 66, reads back 66 (latched)
+    same windows, only the index differs
+    codec 534: nothing there (IAR reads FF)
+    OPL timer detect: pre=00 post=C0 -> FM ALIVE
+    OPL4 wave DevID: 20 -> YMF278B WAVE ALIVE
+    win1 -> 0330-0333:  MPU status 331: BF, RESET -> FE (ACK - MPU ALIVE)
+
+RESULT: the identical probe finds the MPU under 26h and finds nothing
+under 23h, so the FF at 23h is a MEASUREMENT, not a broken test and not
+the open bus that produced the earlier withdrawn claim.
+
+  THE TWO PERSONALITIES ARE EXACTLY COMPLEMENTARY.
+    idx 23h = codec + FM + wave      (no MPU)
+    idx 26h = MPU   + FM + wave      (no codec)
+  The card trades the codec for the MPU.  Neither gives all three.
+
+WHAT THAT SETTLES:
+ - Ship index 23h.  It carries everything except the hardware UART, and
+   the OPL4 wavetable is alive at 38C/38D under it, so MIDI comes from
+   driving that directly; an MPU-401 at 330h for games that insist on
+   one is a software job (the MPUSHIM work already does exactly this).
+ - A wide 330-38D window is moot for now, and with it the LPT1 overlap.
+ - Sweeping the other ~60 indices for a three-function config remains
+   open, but 23h/26h being this cleanly complementary argues against one
+   existing.
+
+AND THE LARGER RESULT: idx 23h is now brought up ENTIRELY BY OUR OWN CODE
+from a clean boot, with the codec, the FM core and the wavetable all
+answering and the mixer unmute verified 12/12.  SCPROENB is no longer
+needed for anything.  That is the same configuration VEW21XGO 2.5
+writes, so 2.5 is validated by proxy -- but 2.5 itself has not yet run.
