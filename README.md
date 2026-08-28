@@ -343,15 +343,24 @@ DPMI host and cannot get one once JEMM is resident.
 
 ## The wavetable synth (synth/)
 
-OPL4MID (a standalone General MIDI .MID player) and OPL4SYN (the same
-engine as a resident INT 2Fh synth — the /SYNTH sink for
-[MPUSHIM](https://github.com/zikolas/mpushim), which gives DOS games an
-MPU-401 at 330h in every trap world). Both drive the OPL4/YRW801 through
-the FM register window on config index 23h, so digital audio, FM and
-wavetable MIDI run together with no vendor software in the path. The
-instrument tables derive from the ALSA opl4 driver (dual BSD/GPL — see
-synth/README.md for provenance). Build with Open Watcom (wcc -ms, C89);
-an on-box BLD.BAT works.
+The CF-VEW212's OPL4/YRW801 wavetable, driven directly — no vendor
+software, no MPU-401 hardware, and no giving up the codec:
+
+- **synth/OPL4MID** plays a General MIDI .MID file from the command
+  line.
+- **synth/OPL4SYN** stays resident and turns the wavetable into a GM
+  synth for games: [MPUSHIM](https://github.com/zikolas/mpushim) traps
+  an MPU-401 at 330h in every trap world (real mode/V86, 16-bit and
+  32-bit protected mode) and feeds it each MIDI byte. DOOM, Tyrian,
+  Monkey Island and DOSMID all play the YRW801 this way from one boot —
+  alongside SB digital audio via VSBPCM, since index 23h keeps the
+  codec.
+
+The quick chain, after `VEW21XGO /PCIC`: load `OPL4SYN`, then the
+MPUSHIM stack with `/SYNTH`. Ready-made launchers (GOWMIDI, GOW32,
+GOW16) live in mpushim's `go/` directory; details, switches and
+provenance in [synth/README.md](synth/README.md). Build with Open
+Watcom (wcc -ms, C89).
 
 ## License
 

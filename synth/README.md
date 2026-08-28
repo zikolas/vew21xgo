@@ -1,8 +1,18 @@
-# vew212-opl4
+# The OPL4 wavetable synth (CF-VEW212)
 
-A General MIDI file player for DOS that drives the OPL4 (Yamaha YMF278B)
-wavetable directly, written for the Panasonic CF-VEW212 "Sound Card PRO"
-PC Card and its onboard YRW801 sample ROM.
+Two DOS programs that drive the OPL4 (Yamaha YMF278B) and its onboard
+YRW801 sample ROM directly, written for the Panasonic CF-VEW212
+"Sound Card PRO" PC Card:
+
+- **OPL4MID** — a standalone General MIDI .MID file player.
+- **OPL4SYN** — the same engine as a resident synth TSR: MIDI bytes go
+  in over an INT 2Fh multiplex, wavetable GM comes out. This is what
+  lets DOS **games** play the wavetable, through
+  [MPUSHIM](https://github.com/zikolas/mpushim).
+
+The CF-VEW211 has no OPL4; on other YMF278B+YRW801 cards exposing the
+OPL4 at the standard FM base this should also work, but only the 212 has
+been tested.
 
 ## Why
 
@@ -14,22 +24,42 @@ configuration index, and they are complementary:
 | 23h | CS4231A codec + OPL4 FM + wavetable | MPU-401 |
 | 26h | MPU-401 at 330h + OPL4 FM + wavetable | codec |
 
-The vendor's DOS MIDI stack needs the MPU-401, so it cannot coexist with
-digital audio. This player needs no MPU: it parses the MIDI file itself and
-programs the OPL4's 24 wave voices over the FM register window, so digital
-audio, FM and wavetable MIDI all work together on index 23h.
+The vendor's DOS MIDI stack needs the card's MPU-401, so it cannot
+coexist with digital audio. These programs need no MPU: they program the
+OPL4's 24 wave voices over the FM register window, so digital audio, FM
+and wavetable MIDI all work together on index 23h.
 
-It should also work on other YMF278B+YRW801 cards that expose the OPL4 at
-the standard FM base, but has only been tested on the CF-VEW212.
+## OPL4SYN - wavetable MIDI for games
 
-## Requirements
+    OPL4SYN [/BASE=388] [/MIX=n] [/TL=n] [/ID=xx]    install, stay resident
+    OPL4SYN /TEST [/ID=xx]                           play a test through it
 
-- The card enabled on COR index 23h with the OPL4 window at 388-38Dh.
-  On the CF-VEW212, run VEW21XGO (this repo) first - the 211 has no OPL4.
-- Something audible on the card's output. On the 212 the wave/FM mix (DO2)
-  is routed into the codec's line input; VEW21XGO unmutes it.
+The resident interface (`AH` = multiplex id, default BDh):
 
-## Usage
+    INT 2Fh  AL=00  install check -> AL=FFh
+             AL=01  MIDI byte in DL
+
+Games don't call that themselves - they write to an MPU-401 at 330h.
+MPUSHIM supplies that MPU-401 as a trap-based facade in every world a
+DOS game lives in (V86, 16-bit and 32-bit protected mode) and hands each
+MIDI byte to OPL4SYN:
+
+    VEW21XGO /PCIC          the enabler, COR index 23h
+    OPL4SYN                 this synth, resident
+    ...trap hosts...        JEMM+QPIEMU, HDPMI16i, HDPMI32i
+    MPUSHM16 /SYNTH         the 16-bit protected-mode shim
+    MPUSHIM /SYNTH          the 32-bit + V86 shim
+
+Ready-made launchers for that stack (and the flavours that add Sound
+Blaster digital via VSBPCM) are in mpushim's `go/` directory - GOWMIDI,
+GOW32, GOW16. Bench-proven catalogue: DOSMID and Monkey Island (V86),
+DOOM (32-bit), Tyrian (16-bit), all from one boot.
+
+Over OPL4MID's engine, OPL4SYN adds a live byte-stream state machine
+(running status, SysEx swallowing), live pitch bend, CC10 pan and
+CC121; CC64 sustain is not implemented yet.
+
+## OPL4MID - the file player
 
     OPL4MID <file.mid> [/TL=n] [/MIX=n] [/PAN=n] [/LOOP] [/LIST] [/V]
                        [/BASE=388]
@@ -42,28 +72,40 @@ the standard FM base, but has only been tested on the CF-VEW212.
     /V       trace note events
 
 Format 0 and 1 files up to 64000 bytes and 32 tracks are handled. Pitch
-bend, expression (CC11), pan (CC10) and sustain (CC64) are not implemented
-yet; volume (CC7), program change and all-notes-off are.
+bend, expression (CC11), pan (CC10) and sustain (CC64) are not
+implemented in the player; volume (CC7), program change and
+all-notes-off are.
+
+## Requirements
+
+- The card enabled on COR index 23h with the OPL4 window at 388-38Dh:
+  run VEW21XGO (this repo) first.
+- Something audible on the card's output. On the 212 the wave/FM mix
+  (DO2) is routed into the codec's line input; VEW21XGO unmutes it.
 
 ## Build
 
-Open Watcom 1.9, 16-bit small model, C89:
+Open Watcom 1.9, 16-bit small model, C89 (an on-box BLD.BAT with
+`wcc -ms` works the same):
 
     wcc -ms OPL4MID.C
     wlink system dos file OPL4MID.obj
 
+    wcc -ms OPL4SYN.C
+    wlink system dos file OPL4SYN.obj
+
 ## Instrument data
 
 The YRW801 region tables (key splits, pitch offsets, envelope and level
-parameters, drum map) and the F-number pitch map are ported from the Linux
-ALSA opl4 driver, sound/drivers/opl4/yrw801.c and opl4_synth.c, copyright
-2003 Clemens Ladisch, dual-licensed BSD-2-clause / GPL v2. Reference copies
-of those files are in ref-alsa/, and genalsa.py regenerates OPL4TAB.H from
-them. The melodic map was independently cross-checked against register
-captures taken from the vendor renderer on real hardware (doc/ in the
-vew21xgo repo).
+parameters, drum map) and the F-number pitch map are ported from the
+Linux ALSA opl4 driver, sound/drivers/opl4/yrw801.c and opl4_synth.c,
+copyright 2003 Clemens Ladisch, dual-licensed BSD-2-clause / GPL v2.
+Reference copies of those files are in ref-alsa/, and genalsa.py
+regenerates OPL4TAB.H from them. The melodic map was independently
+cross-checked against register captures taken from the vendor renderer
+on real hardware (doc/ in this repo).
 
 ## License
 
-GPL v2, see LICENSE. The ALSA-derived tables are used under the GPL option
-of their dual license.
+GPL v2, see the repo LICENSE. The ALSA-derived tables are used under the
+GPL option of their dual license.
