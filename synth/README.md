@@ -57,7 +57,9 @@ DOOM (32-bit), Tyrian (16-bit), all from one boot.
 
 Over OPL4MID's engine, OPL4SYN adds a live byte-stream state machine
 (running status, SysEx swallowing), live pitch bend, CC10 pan and
-CC121; CC64 sustain is not implemented yet.
+CC121; CC64 sustain is not implemented yet. It keeps 17,712 bytes
+resident - it links no C library, printing and parsing through DOSIO.H
+instead, because everything stdio drags in would stay resident too.
 
 ## OPL4MID - the file player
 
@@ -97,13 +99,30 @@ Open Watcom 1.9, 16-bit small model, C89 (an on-box BLD.BAT with
 ## Instrument data
 
 The YRW801 region tables (key splits, pitch offsets, envelope and level
-parameters, drum map) and the F-number pitch map are ported from the
-Linux ALSA opl4 driver, sound/drivers/opl4/yrw801.c and opl4_synth.c,
+parameters, drum map) and the volume table are ported from the Linux
+ALSA opl4 driver, sound/drivers/opl4/yrw801.c and opl4_synth.c,
 copyright 2003 Clemens Ladisch, dual-licensed BSD-2-clause / GPL v2.
 Reference copies of those files are in ref-alsa/, and genalsa.py
 regenerates OPL4TAB.H from them. The melodic map was independently
 cross-checked against register captures taken from the vendor renderer
 on real hardware (doc/ in this repo).
+
+They are packed for a program that stays resident, and the packing is
+generated, never hand-edited. A region quotes its level set (ksc, pan,
+att, vf) and its envelope set by one-byte index, since 610 regions draw
+on only 126 and 220 distinct sets; interning whole regions would be
+pointless, as 601 of the 610 differ once tone and pitch offset are
+included. ALSA's 1536-entry F-number table is exactly
+round(1024*2^(p/1536))-1024, so pitch_fnum() interpolates it from 13
+semitone knots instead - 3072 bytes become 26, worst case 1 LSB, finer
+than the OPL4's own F-number quantisation. Read regions through the RG_*
+accessors and pitch through pitch_fnum(); nothing outside OPL4TAB.H
+should know how any of it is stored.
+
+verifytab.py is the check on all of that: it digests every value that
+reaches the chip, for all 129 programs and all 128 notes, from two
+layouts and compares. Run it against the previous OPL4TAB.H after any
+change to the packing.
 
 ## License
 

@@ -36,11 +36,17 @@
  *
  * License: GPL v2, like OPL4MID and the tables (see LICENSE).
  */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
 #include <conio.h>
 #include <dos.h>
+#include "DOSIO.H"
+
+extern unsigned _psp;       /* the startup sets it; stdlib.h is not linked */
+
+/* INT 2Fh multiplex call, inline: int86() would drag in its own slice of
+ * the library, and this stays resident.  Only AL carries an answer. */
+static unsigned mux_call(unsigned ax, unsigned dx);
+#pragma aux mux_call = "int 2Fh" parm [ax] [dx] value [ax] \
+                       modify [bx cx dx si di es];
 
 static unsigned BASE = 0x388;
 #define FMA1  (BASE + 2)
@@ -134,7 +140,7 @@ static void voice_pitch(int v)
     if (pitch < 0)        pitch = 0;
     if (pitch >= 0x6000L) pitch = 0x5FFFL;
     octv = (int)(pitch / 0x600) - 8;
-    f = pitch_map[(unsigned)(pitch % 0x600)];
+    f = pitch_fnum((unsigned)(pitch % 0x600));
     wv_put((unsigned char)(0x20 + v),
            (unsigned char)(((f & 0x7F) << 1) | ((vc[v].tone >> 8) & 1)));
     wv_put((unsigned char)(0x38 + v),
@@ -148,7 +154,7 @@ static void start_region(int ch, int note, int pnote, int vel,
 
     v = voice_alloc();
     vc[v].ch = ch; vc[v].note = note; vc[v].on = 1; vc[v].age = agec++;
-    vc[v].tone = rg->tone; vc[v].ksc = rg->ksc; vc[v].pofs = rg->pofs;
+    vc[v].tone = rg->tone; vc[v].ksc = RG_KSC(rg); vc[v].pofs = rg->pofs;
     vc[v].pnote = (unsigned char)pnote;
 
     /* tone number bit 8 must be latched in 20h BEFORE the 08h write -
@@ -156,7 +162,7 @@ static void start_region(int ch, int note, int pnote, int vel,
     wv_put((unsigned char)(0x20 + v), (unsigned char)((rg->tone >> 8) & 1));
     wv_put((unsigned char)(0x08 + v), (unsigned char)(rg->tone & 0xFF));
 
-    pan = rg->pan + chpan[ch];
+    pan = RG_PAN(rg) + chpan[ch];
     if (pan < -7) pan = -7;
     if (pan >  7) pan =  7;
     vc[v].misc = (unsigned char)(0x20 | (pan & 0x0F));
@@ -164,8 +170,8 @@ static void start_region(int ch, int note, int pnote, int vel,
 
     voice_pitch(v);
 
-    att = rg->att + vol_tab[chvol[ch] & 0x7F] + vol_tab[vel & 0x7F];
-    att = 0x7F - ((0x7F - att) * rg->vf) / 0xFE;
+    att = RG_ATT(rg) + vol_tab[chvol[ch] & 0x7F] + vol_tab[vel & 0x7F];
+    att = 0x7F - ((0x7F - att) * RG_VF(rg)) / 0xFE;
     att += o_tl;
     if (att < 0)    att = 0;
     if (att > 0x7E) att = 0x7E;
@@ -174,11 +180,11 @@ static void start_region(int ch, int note, int pnote, int vel,
     /* envelope overrides only after the header load ends, or the loaded
      * header would clobber them */
     { int t = 400; while ((inp(BASE) & 0x02) && --t) iod(1); }
-    wv_put((unsigned char)(0x80 + v), rg->lfovib);
-    wv_put((unsigned char)(0x98 + v), rg->ad1);
-    wv_put((unsigned char)(0xB0 + v), rg->ld2);
-    wv_put((unsigned char)(0xC8 + v), rg->rc);
-    wv_put((unsigned char)(0xE0 + v), rg->trem);
+    wv_put((unsigned char)(0x80 + v), RG_LFOVIB(rg));
+    wv_put((unsigned char)(0x98 + v), RG_AD1(rg));
+    wv_put((unsigned char)(0xB0 + v), RG_LD2(rg));
+    wv_put((unsigned char)(0xC8 + v), RG_RC(rg));
+    wv_put((unsigned char)(0xE0 + v), RG_TREM(rg));
 
     vc[v].misc = (unsigned char)((vc[v].misc & 0x1F) | 0x80);   /* KEY ON */
     wv_put((unsigned char)(0x68 + v), vc[v].misc);
@@ -190,8 +196,8 @@ static void note_on(int ch, int note, int vel)
     unsigned base, cnt;
     if (vel == 0) { note_off(ch, note); return; }
     prog = ch == 9 ? 128 : (chprog[ch] & 0x7F);
-    base = alsa_prog[prog].base;
-    cnt  = alsa_prog[prog].n;
+    base = alsa_prog[prog];
+    cnt  = alsa_prog[prog + 1] - base;
     for (i = 0; i < (int)cnt && n < 2; i++) {
         const REGION *rg = &alsa_reg[base + i];
         if (note >= rg->lo && note <= rg->hi) {
@@ -312,9 +318,12 @@ static unsigned get_sp(void);
 
 static void mux_send(unsigned char b)       /* /TEST: feed the resident copy */
 {
-    union REGS r;
-    r.h.ah = mux_id; r.h.al = 0x01; r.h.dl = b;
-    int86(0x2F, &r, &r);
+    mux_call(((unsigned)mux_id << 8) | 0x01, b);
+}
+
+static int mux_present(void)                /* AL = FFh from an installed copy */
+{
+    return (mux_call(((unsigned)mux_id << 8) | 0x00, 0) & 0xFF) == 0xFF;
 }
 
 static void ticks_wait(unsigned n)          /* BIOS ticks, ~55 ms each */
@@ -327,25 +336,21 @@ static void ticks_wait(unsigned n)          /* BIOS ticks, ~55 ms each */
 static int self_test(void)
 {
     static const unsigned char scale[] = { 60, 64, 67, 72 };
-    union REGS r;
     int i;
 
-    r.h.ah = mux_id; r.h.al = 0x00;
-    int86(0x2F, &r, &r);
-    if (r.h.al != 0xFF) {
-        printf("OPL4SYN /TEST: nothing resident on id %02X.\r\n", mux_id);
+    if (!mux_present()) {
+        o_str("OPL4SYN /TEST: nothing resident on id ");
+        o_x(mux_id, 2); o_str(".\r\n");
         return 1;
     }
-    printf("piano scale");
-    fflush(stdout);
+    o_str("piano scale");
     mux_send(0xC0); mux_send(0x00);              /* program 0              */
     for (i = 0; i < 4; i++) {
         mux_send(0x90); mux_send(scale[i]); mux_send(0x64);
         ticks_wait(6);
         mux_send(0x80); mux_send(scale[i]); mux_send(0x00);
     }
-    printf(", drums");
-    fflush(stdout);
+    o_str(", drums");
     for (i = 0; i < 4; i++) {                    /* kick, snare, hats      */
         mux_send(0x99); mux_send(36); mux_send(0x70);
         mux_send(0x99); mux_send(i & 1 ? 38 : 42); mux_send(0x60);
@@ -353,7 +358,7 @@ static int self_test(void)
     }
     ticks_wait(9);
     mux_send(0xB0); mux_send(123); mux_send(0);  /* tidy up                */
-    printf(" - done.\r\n");
+    o_str(" - done.\r\n");
     return 0;
 }
 
@@ -367,28 +372,24 @@ int main(int argc, char **argv)
         char *p = argv[i];
         if (p[0] != '/' && p[0] != '-') continue;
         if (p[1] == '?') {
-            printf("OPL4SYN [/BASE=388] [/MIX=n] [/TL=n] [/ID=xx]  install (TSR)\r\n");
-            printf("OPL4SYN /TEST [/ID=xx]                play a test through it\r\n");
-            printf("Needs the card on COR index 23h (run VEW21XGO first).\r\n");
+            o_str("OPL4SYN [/BASE=388] [/MIX=n] [/TL=n] [/ID=xx]  install (TSR)\r\n"
+                  "OPL4SYN /TEST [/ID=xx]                play a test through it\r\n"
+                  "Needs the card on COR index 23h (run VEW21XGO first).\r\n");
             return 0;
         }
-        if      (!strnicmp(p+1,"BASE",4)) BASE   = (unsigned)strtol(p+5+(p[5]=='='),0,16);
-        else if (!strnicmp(p+1,"TEST",4)) test   = 1;
-        else if (!strnicmp(p+1,"MIX",3))  mix    = (int)strtol(p+4+(p[4]=='='),0,0);
-        else if (!strnicmp(p+1,"TL",2))   o_tl   = (int)strtol(p+3+(p[3]=='='),0,0);
-        else if (!strnicmp(p+1,"ID",2))   mux_id = (unsigned char)strtol(p+3+(p[3]=='='),0,16);
+        if      (p_kw(p+1,"BASE",4)) BASE   = p_hex(p+5+(p[5]=='='));
+        else if (p_kw(p+1,"TEST",4)) test   = 1;
+        else if (p_kw(p+1,"MIX",3))  mix    = p_dec(p+4+(p[4]=='='));
+        else if (p_kw(p+1,"TL",2))   o_tl   = p_dec(p+3+(p[3]=='='));
+        else if (p_kw(p+1,"ID",2))   mux_id = (unsigned char)p_hex(p+3+(p[3]=='='));
     }
 
     if (test) return self_test();
 
-    {   /* already installed on this id? */
-        union REGS r;
-        r.h.ah = mux_id; r.h.al = 0x00;
-        int86(0x2F, &r, &r);
-        if (r.h.al == 0xFF) {
-            printf("OPL4SYN: something already answers INT 2Fh id %02X.\r\n", mux_id);
-            return 1;
-        }
+    if (mux_present()) {
+        o_str("OPL4SYN: something already answers INT 2Fh id ");
+        o_x(mux_id, 2); o_str(".\r\n");
+        return 1;
     }
 
     /* Bring the OPL4 up.  The NEW2 gate STAYS OPEN for the TSR's lifetime -
@@ -398,7 +399,8 @@ int main(int argc, char **argv)
     new2(1);
     id = wv_get(0x02);
     if ((id & 0xF0) != 0x20) {
-        printf("DevID %02X: no OPL4 at %03X - run VEW21XGO first.\r\n", id, BASE);
+        o_str("DevID "); o_x(id, 2); o_str(": no OPL4 at "); o_x(BASE, 3);
+        o_str(" - run VEW21XGO first.\r\n");
         new2(0);
         return 1;
     }
@@ -410,9 +412,11 @@ int main(int argc, char **argv)
     prev2f = _dos_getvect(0x2F);
     _dos_setvect(0x2F, int2f_handler);
 
-    printf("OPL4SYN: OPL4 at %03X, INT 2Fh id %02X - resident.\r\n", BASE, mux_id);
-    printf("Feed it with MPUSHIM /SYNTH%s, or OPL4SYN /TEST.\r\n",
-           mux_id == 0xBD ? "" : "=xx");
+    o_str("OPL4SYN: OPL4 at "); o_x(BASE, 3);
+    o_str(", INT 2Fh id "); o_x(mux_id, 2); o_str(" - resident.\r\n");
+    o_str("Feed it with MPUSHIM /SYNTH");
+    if (mux_id != 0xBD) { o_str("="); o_x(mux_id, 2); }
+    o_str(", or OPL4SYN /TEST.\r\n");
 
     keep = get_ss() + ((get_sp() + 15) >> 4) + 1 - _psp;
     _dos_keep(0, keep);

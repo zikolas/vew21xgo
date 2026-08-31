@@ -153,27 +153,27 @@ static void start_region(int ch, int note, int pnote, int vel,
     wv_put((unsigned char)(0x08 + v), (unsigned char)(rg->tone & 0xFF));
 
     /* pan + LFO reset; safe while the header loads */
-    pan = o_pan != -99 ? o_pan : rg->pan;
+    pan = o_pan != -99 ? o_pan : RG_PAN(rg);
     if (pan < -7) pan = -7;
     if (pan >  7) pan =  7;
     vc[v].misc = (unsigned char)(0x20 | (pan & 0x0F));
     wv_put((unsigned char)(0x68 + v), vc[v].misc);
 
     /* pitch, in 100/128-cent units: 0x80 = 1 semitone, 0x600 = 1 octave */
-    pitch = (((long)(pnote - 60) << 7) * rg->ksc) / 100 + (60L << 7);
+    pitch = (((long)(pnote - 60) << 7) * RG_KSC(rg)) / 100 + (60L << 7);
     pitch += rg->pofs;
     if (pitch < 0)        pitch = 0;
     if (pitch >= 0x6000L) pitch = 0x5FFFL;
     octv = (int)(pitch / 0x600) - 8;
-    f = pitch_map[(unsigned)(pitch % 0x600)];
+    f = pitch_fnum((unsigned)(pitch % 0x600));
     wv_put((unsigned char)(0x20 + v),
            (unsigned char)(((f & 0x7F) << 1) | ((rg->tone >> 8) & 1)));
     wv_put((unsigned char)(0x38 + v),
            (unsigned char)(((octv & 0x0F) << 4) | ((f >> 7) & 0x07)));
 
     /* level: attenuations add, then the region's volume factor scales */
-    att = rg->att + vol_tab[chvol[ch] & 0x7F] + vol_tab[vel & 0x7F];
-    att = 0x7F - ((0x7F - att) * rg->vf) / 0xFE;
+    att = RG_ATT(rg) + vol_tab[chvol[ch] & 0x7F] + vol_tab[vel & 0x7F];
+    att = 0x7F - ((0x7F - att) * RG_VF(rg)) / 0xFE;
     att += o_tl;
     if (att < 0)    att = 0;
     if (att > 0x7E) att = 0x7E;
@@ -182,11 +182,11 @@ static void start_region(int ch, int note, int pnote, int vel,
     /* envelope overrides only after the header load ends, or the loaded
      * header would clobber them */
     { int t = 200; while ((inp(BASE) & 0x02) && --t) iod(8); }
-    wv_put((unsigned char)(0x80 + v), rg->lfovib);
-    wv_put((unsigned char)(0x98 + v), rg->ad1);
-    wv_put((unsigned char)(0xB0 + v), rg->ld2);
-    wv_put((unsigned char)(0xC8 + v), rg->rc);
-    wv_put((unsigned char)(0xE0 + v), rg->trem);
+    wv_put((unsigned char)(0x80 + v), RG_LFOVIB(rg));
+    wv_put((unsigned char)(0x98 + v), RG_AD1(rg));
+    wv_put((unsigned char)(0xB0 + v), RG_LD2(rg));
+    wv_put((unsigned char)(0xC8 + v), RG_RC(rg));
+    wv_put((unsigned char)(0xE0 + v), RG_TREM(rg));
 
     vc[v].misc = (unsigned char)((vc[v].misc & 0x1F) | 0x80);   /* KEY ON */
     wv_put((unsigned char)(0x68 + v), vc[v].misc);
@@ -201,8 +201,8 @@ static void note_on(int ch, int note, int vel)
     unsigned base, cnt;
     if (vel == 0) { note_off(ch, note); return; }
     prog = ch == 9 ? 128 : (chprog[ch] & 0x7F);
-    base = alsa_prog[prog].base;
-    cnt  = alsa_prog[prog].n;
+    base = alsa_prog[prog];
+    cnt  = alsa_prog[prog + 1] - base;
     for (i = 0; i < (int)cnt && n < 2; i++) {
         const REGION *rg = &alsa_reg[base + i];
         if (note >= rg->lo && note <= rg->hi) {
