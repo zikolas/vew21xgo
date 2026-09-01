@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.6 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.7 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -109,7 +109,7 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0205h
+VGVER   equ 0206h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
 VBMAX   equ 80h                       ; VERS_1 capture buffer size.  The
@@ -268,8 +268,8 @@ P_IRQ_LEN equ 8
 p_cfg:   dw 0                         ; +00 socket
 p_cfg_at dw 0002h                     ; +02 attrs: bit1 = IRQ active
 p_cfg_vc db 50                        ; +04 Vcc  (tenths of a volt)
-p_cfg_v1 db 50                        ; +05 Vpp1
-p_cfg_v2 db 50                        ; +06 Vpp2
+p_cfg_v1 db 0                         ; +05 Vpp1
+p_cfg_v2 db 0                         ; +06 Vpp2
          db 02h                       ; +07 interface: I/O+memory
 p_cfg_cb dd 00000200h                 ; +08 config register base
 p_cfg_st db 0                        ; +0C status reg (CCSR: /SPKR Audio bit)
@@ -757,8 +757,8 @@ cs_configure:
         mov  word [p_cfg_at], 0
 .cat:
         mov  byte [p_cfg_vc], 50
-        mov  byte [p_cfg_v1], 50
-        mov  byte [p_cfg_v2], 50
+        mov  byte [p_cfg_v1], 0       ; Vpp OFF, no fallback: we never program
+        mov  byte [p_cfg_v2], 0
         mov  byte [p_cfg_st], 0       ; CCSR: /SPKR = Audio bit -> #SPKR pin
         mov  byte [p_cfg_pr], 01h     ; present: option reg only
         cmp  byte [o_spkr], 0
@@ -767,10 +767,6 @@ cs_configure:
         mov  byte [p_cfg_pr], 03h     ; option + status (CCSR)
 .nspk:
         call try_cfg                  ; walks candidate ArgLengths (1Bh dance)
-        jnc  .cfgok
-        mov  byte [p_cfg_v1], 0       ; some stacks reject Vpp=Vcc
-        mov  byte [p_cfg_v2], 0
-        call try_cfg
         jnc  .cfgok
         mov  [r_code], ax
         mov  byte [r_stage], 4
@@ -987,7 +983,9 @@ chip_init:
         jz   .nofm
         cmp  byte [o_tone], 0
         je   .nofm
-        call fm_tone
+        mov  si, m_toned              ; announce BEFORE the ding, not after:
+        call prstr                    ; the amp settle + ring is ~3.4 s of
+        call fm_tone                  ; silence, and reads as a hang
 .nofm:
         pop  si
         pop  dx
@@ -4068,7 +4066,7 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.6 - CF-VEW211/212/J04 enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.7 - CF-VEW211/212/J04 enabler (PCIC/CS/OB)',13,10,0
 m_midipc:  db '   /MIDI needs the PCIC backend in this build - card left on the',13,10
            db '   codec config (index 23h).  Re-run with /PCIC for the MPU.',13,10,0
 m_help:
