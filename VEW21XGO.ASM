@@ -1,5 +1,5 @@
 ;==========================================================================
-;  VEW21XGO 2.5 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.6 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
 ;               adds an OPL4 wavetable), three host backends in one .COM:
@@ -4068,7 +4068,7 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.5 - CF-VEW211/212/J04 enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.6 - CF-VEW211/212/J04 enabler (PCIC/CS/OB)',13,10,0
 m_midipc:  db '   /MIDI needs the PCIC backend in this build - card left on the',13,10
            db '   codec config (index 23h).  Re-run with /PCIC for the MPU.',13,10,0
 m_help:
