@@ -73,10 +73,23 @@ instead, because everything stdio drags in would stay resident too.
     /LIST    parse and report, play nothing
     /V       trace note events
 
-Format 0 and 1 files up to 64000 bytes and 32 tracks are handled. Pitch
-bend, expression (CC11), pan (CC10) and sustain (CC64) are not
+Format 0 and 1 files up to free DOS memory and 32 tracks are handled.
+Pitch bend, expression (CC11), pan (CC10) and sustain (CC64) are not
 implemented in the player; volume (CC7), program change and
 all-notes-off are.
+
+The closing line reports how many events were dispatched and how late
+the worst of them was. Diagnostics: `/FAST` plays with no waiting (use
+`/TL=127`) and reports the CPU time; `/NOIO` does the same with the OPL4
+untouched; `/PROF` splits it between scheduler and note programming;
+`/BENCH` times the building blocks. They exist because of the HP 200LX,
+where the player found its limits: an 80186 whose memory reads cost ~4 µs
+and whose undecoded-port reads cost 6.4 µs, and a BIOS timer in mode 3
+whose count sweeps twice per tick. The clock is calibrated against the
+BIOS tick at start, register writes are paced by a calibrated spin loop
+rather than port-80h reads, the keyboard is polled through the BIOS
+buffer pointers rather than DOS, and note-ons find their regions through
+a (program, note) table instead of a scan.
 
 ## Requirements
 
@@ -90,8 +103,11 @@ all-notes-off are.
 Open Watcom 1.9, 16-bit small model, C89 (an on-box BLD.BAT with
 `wcc -ms` works the same):
 
-    wcc -ms OPL4MID.C
+    wcc -ms -ox -s OPL4MID.C
     wlink system dos file OPL4MID.obj
+
+For the HP 200LX add `-0` (8086 code); `-ox -s` matters there — it is
+worth 1.6x on a machine where every instruction counts.
 
     wcc -ms OPL4SYN.C
     wlink system dos file OPL4SYN.obj

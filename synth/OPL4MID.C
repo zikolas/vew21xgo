@@ -52,49 +52,170 @@ static unsigned BASE = 0x388;
 #define WADDR (BASE + 4)
 #define WDATA (BASE + 5)
 
-static void iod(unsigned n){ while (n--) (void)inp(0x80); }
+/* Pacing in real microseconds.  The first version paced with port-80h reads,
+ * the PC idiom where one read is ~1 us - on the HP 200LX a read of that
+ * undecoded port is ~6.4 us (measured), which turned the nominal 40 us
+ * between OPL4 register bytes into 260 and a nine-note chord into a
+ * 50-100 ms stall.  spin() is calibrated against the BIOS tick at start. */
+static volatile unsigned spin_sink;
+static void spin(unsigned n) { while (n--) spin_sink++; }
+static unsigned long spin100_per_tick = 1;      /* spin(100) calls per tick */
+static unsigned spin_settle = 1, spin_poll = 1; /* spins for SETTLE / POLL us */
+/* spins_for(us): microseconds -> spin count.  Its 32-bit multiply and divide
+ * cost a 186 ~250 us - twenty times the delays the player needs - so the two
+ * delays used per register byte are computed once at calibration and taken
+ * straight from spin(). */
+static unsigned spins_for(unsigned us)
+{
+    unsigned long n = ((unsigned long)us * spin100_per_tick * 100UL) / 54925UL;
+    if (n == 0) n = 1;
+    if (n > 65535UL) n = 65535UL;
+    return (unsigned)n;
+}
+/* The YMF278B wants ~1 us (32 master clocks) between register bytes; ALSA
+ * paces its OPL4 writes not at all.  4 us keeps a margin on any bus. */
+#define SETTLE 4
+#define POLL   8
+
+/* /FAST: no waiting between events (a CPU-cost measurement, use /TL=127);
+ * /NOIO: the OPL4 is not touched at all (parser + scheduler cost alone). */
+static int o_fast = 0, o_noio = 0, o_bench = 0, o_prof = 0;
 
 static unsigned char wv_get(unsigned char r)
 {
-    outp(WADDR, r); iod(40);
+    if (o_noio) return 0;
+    outp(WADDR, r); spin(spin_settle);
     return (unsigned char)inp(WDATA);
 }
 static void wv_put(unsigned char r, unsigned char v)
 {
-    outp(WADDR, r); iod(40);
-    outp(WDATA, v); iod(40);
+    if (o_noio) return;
+    outp(WADDR, r); spin(spin_settle);
+    outp(WDATA, v); spin(spin_settle);
 }
 static void new2(int on)
 {
-    outp(FMA1, 0x05); iod(40);
-    outp(FMD1, on ? 0x03 : 0x00); iod(40);
+    outp(FMA1, 0x05); spin(spin_settle);
+    outp(FMD1, on ? 0x03 : 0x00); spin(spin_settle);
 }
 
 #include "OPL4TAB.H"
 
-/* ---- microsecond clock: PIT ch0 read against the BIOS tick -------------- */
+/* ---- microsecond clock: PIT ch0 read against the BIOS tick --------------
+ * The BIOS runs channel 0 in mode 3, where the count steps by two and
+ * sweeps 65536..0 TWICE per 54.925 ms tick (measured: 131072 decrements
+ * per tick, on the 200LX and on PCs alike).  The first version assumed one
+ * sweep per tick, so its clock ran at double speed for half a tick and
+ * jumped back 27 ms at the midpoint - a wobble on every beat.  Now the
+ * decrements per tick are calibrated at start, the sweeps within a tick
+ * are counted (the count going UP between two reads is a wrap; the reads
+ * are far closer together than one sweep), and the tick edge resyncs. */
+#define TICK_US 54925UL
+static unsigned long dec_per_tick = 131072UL;  /* PIT decrements per tick */
+static unsigned long us_per_dec_x64k = 27462UL;/* (TICK_US<<16)/dec_per_tick */
+static unsigned long clk_tick = 0xFFFFFFFFUL;  /* tick of the last read    */
+static unsigned      clk_last = 0;             /* count at the last read   */
+static unsigned      clk_sweep = 0;            /* wraps seen this tick     */
+
+static unsigned long bios_tick(void)
+{   /* volatile: the optimiser must not hoist this out of a wait loop */
+    return *(volatile unsigned long __far *)MK_FP(0x0040, 0x006C);
+}
+static unsigned pit_count(void)
+{
+    unsigned char lo, hi;
+    outp(0x43, 0x00);                           /* latch counter 0          */
+    lo = (unsigned char)inp(0x40);
+    hi = (unsigned char)inp(0x40);
+    return ((unsigned)hi << 8) | lo;            /* counts DOWN to 0         */
+}
+static unsigned long clk_base = 0;             /* tick * TICK_US, kept incrementally */
 static unsigned long now_us(void)
 {
-    unsigned long t1, t2;
+    unsigned long t1, t2, dec;
     unsigned c;
-    unsigned char lo, hi;
     int guard = 4;
     do {
-        t1 = *(unsigned long __far *)MK_FP(0x0040, 0x006C);
-        outp(0x43, 0x00);                       /* latch counter 0          */
-        lo = (unsigned char)inp(0x40);
-        hi = (unsigned char)inp(0x40);
-        t2 = *(unsigned long __far *)MK_FP(0x0040, 0x006C);
+        t1 = bios_tick();
+        c  = pit_count();
+        t2 = bios_tick();
     } while (t1 != t2 && --guard);
-    c = ((unsigned)hi << 8) | lo;               /* counts DOWN from 65536   */
-    return t1 * 54925UL + ((65536UL - c) * 54925UL) / 65536UL;
+    if (t1 != clk_tick) {                       /* new tick: advance the base by
+                                                 * adds, not a 32-bit multiply */
+        if (clk_tick != 0xFFFFFFFFUL && t1 - clk_tick < 8)
+             { while (clk_tick != t1) { clk_base += TICK_US; clk_tick++; } }
+        else { clk_base = t1 * TICK_US; clk_tick = t1; }   /* first call, or a long stall */
+        clk_sweep = 0;
+    }
+    else if (c > clk_last) clk_sweep++;
+    clk_last = c;
+    dec = (unsigned long)clk_sweep * 65536UL + (65536UL - c);
+    if (dec > dec_per_tick) dec = dec_per_tick;
+    return clk_base + ((dec * us_per_dec_x64k) >> 16);
+}
+
+/* section profiler for /BENCH: PIT count deltas (2 counts per us in mode 3) */
+static unsigned long pf[8];
+static unsigned pf_last;
+static void pf_mark(void) { pf_last = pit_count(); }
+static void pf_add(int i)
+{
+    unsigned c = pit_count();
+    pf[i] += (unsigned)(pf_last - c);      /* counts down; wrap = 65536 - ok */
+    pf_last = c;
+}
+
+/* calibrate: spin() per tick (for iod) and PIT decrements per tick (for
+ * now_us), each over one full BIOS tick.  ~0.2 s at start. */
+static void calibrate(void)
+{
+    unsigned long t, n = 0, tot = 0;
+    unsigned last, c;
+    t = bios_tick(); while (bios_tick() == t) ; t = bios_tick();
+    while (bios_tick() == t) { spin(100); n++; }
+    spin100_per_tick = n ? n : 1;
+    spin_settle = spins_for(SETTLE);
+    spin_poll   = spins_for(POLL);
+    t = bios_tick(); while (bios_tick() == t) ; t = bios_tick();
+    last = pit_count();
+    while (bios_tick() == t) {
+        c = pit_count();
+        tot += (c <= last) ? (unsigned long)(last - c)
+                           : (unsigned long)last + (65536UL - c);
+        last = c;
+    }
+    dec_per_tick = ((tot + 32768UL) / 65536UL) * 65536UL;
+    if (dec_per_tick == 0) dec_per_tick = 65536UL;
+    us_per_dec_x64k = (TICK_US << 16) / dec_per_tick;
 }
 static unsigned long t0;
+
+/* A key waiting?  Straight from the BIOS keyboard buffer's head/tail
+ * pointers: kbhit() is a DOS call, slow on a 186 and - on the HP 200LX -
+ * exactly the polling the ROM's power manager watches for and throttles.
+ * The scheduler asks this every few microseconds. */
+static int key_waiting(void)
+{
+    return *(volatile unsigned __far *)MK_FP(0x0040, 0x001A) !=
+           *(volatile unsigned __far *)MK_FP(0x0040, 0x001C);
+}
+
+/* how late the scheduler was when it dispatched, for the closing report */
+static unsigned long late_max = 0, late_n = 0, ev_n = 0, run_t0 = 0;
+static unsigned long uspt_tempo = 0, uspt256 = 0, uspt_maxd = 0;
+/* /FAST profile: microseconds in the scheduler head vs decode+dispatch */
+static unsigned long prof_a = 0, prof_b = 0, prof_c = 0, n_on = 0, n_off = 0, n_cc = 0;
+
 static void wait_until(unsigned long us)
 {
-    while ((now_us() - t0) < us) {
-        if (kbhit()) return;
+    unsigned long now;
+    if (o_fast) { ev_n++; return; }
+    while ((now = now_us() - t0) < us) {
+        if (key_waiting()) return;
     }
+    ev_n++;
+    if (now - us > late_max) late_max = now - us;
+    if (now - us > 10000UL) late_n++;
 }
 
 /* ---- voices ------------------------------------------------------------ */
@@ -144,8 +265,10 @@ static void start_region(int ch, int note, int pnote, int vel,
     long pitch;
     unsigned f;
 
+    if (o_bench) pf_mark();
     v = voice_alloc();
     vc[v].ch = ch; vc[v].note = note; vc[v].on = 1; vc[v].age = agec++;
+    if (o_bench) pf_add(0);
 
     /* tone number bit 8 must be latched in 20h BEFORE the 08h write -
      * that write triggers the 12-byte header fetch from the YRW801. */
@@ -158,14 +281,19 @@ static void start_region(int ch, int note, int pnote, int vel,
     if (pan >  7) pan =  7;
     vc[v].misc = (unsigned char)(0x20 | (pan & 0x0F));
     wv_put((unsigned char)(0x68 + v), vc[v].misc);
+    if (o_bench) pf_add(1);
 
     /* pitch, in 100/128-cent units: 0x80 = 1 semitone, 0x600 = 1 octave */
-    pitch = (((long)(pnote - 60) << 7) * RG_KSC(rg)) / 100 + (60L << 7);
-    pitch += rg->pofs;
+    pitch = (long)(pnote - 60) << 7;
+    if (RG_KSC(rg) != 100) pitch = (pitch * RG_KSC(rg)) / 100;  /* rare */
+    pitch += (60L << 7) + rg->pofs;
     if (pitch < 0)        pitch = 0;
     if (pitch >= 0x6000L) pitch = 0x5FFFL;
-    octv = (int)(pitch / 0x600) - 8;
-    f = pitch_fnum((unsigned)(pitch % 0x600));
+    {   unsigned up = (unsigned)pitch;          /* fits: 16-bit divides */
+        octv = (int)(up / 0x600) - 8;
+        f = pitch_fnum(up % 0x600);
+    }
+    if (o_bench) pf_add(2);
     wv_put((unsigned char)(0x20 + v),
            (unsigned char)(((f & 0x7F) << 1) | ((rg->tone >> 8) & 1)));
     wv_put((unsigned char)(0x38 + v),
@@ -178,10 +306,11 @@ static void start_region(int ch, int note, int pnote, int vel,
     if (att < 0)    att = 0;
     if (att > 0x7E) att = 0x7E;
     wv_put((unsigned char)(0x50 + v), (unsigned char)((att << 1) | 1));
+    if (o_bench) pf_add(3);
 
     /* envelope overrides only after the header load ends, or the loaded
      * header would clobber them */
-    { int t = 200; while ((inp(BASE) & 0x02) && --t) iod(8); }
+    if (!o_noio) { int t = 200; while ((inp(BASE) & 0x02) && --t) spin(spin_poll); }
     wv_put((unsigned char)(0x80 + v), RG_LFOVIB(rg));
     wv_put((unsigned char)(0x98 + v), RG_AD1(rg));
     wv_put((unsigned char)(0xB0 + v), RG_LD2(rg));
@@ -190,33 +319,75 @@ static void start_region(int ch, int note, int pnote, int vel,
 
     vc[v].misc = (unsigned char)((vc[v].misc & 0x1F) | 0x80);   /* KEY ON */
     wv_put((unsigned char)(0x68 + v), vc[v].misc);
+    if (o_bench) pf_add(4);
 
     if (o_verb) printf("ch%02d n%03d v%03d -> voice %d tone %u att %d\r\n",
                        ch, note, vel, v, rg->tone, att);
 }
 
-static void note_on(int ch, int note, int vel)
+/* (program, note) -> up to two region indices, built once at start.  The
+ * region list is walked per note otherwise, and on the palmtop (~1 MIPS for
+ * compiled code) that walk was a millisecond - more than programming the
+ * voice.  129 programs x 128 notes x 2 x 2 bytes = 66048 bytes, in a far
+ * block reached by explicit segment:offset (see FBP). */
+#define RT_NONE 0xFFFFU
+static unsigned rtseg;
+#define RTP(prog, note) ((unsigned __far *)MK_FP(rtseg + (unsigned)(((unsigned long)(prog) * 128UL + (note)) >> 2), \
+                                                 (unsigned)(((prog) * 128 + (note)) & 3) * 4))
+static int build_rtab(void)
 {
-    int i, n = 0, prog;
-    unsigned base, cnt;
-    if (vel == 0) { note_off(ch, note); return; }
-    prog = ch == 9 ? 128 : (chprog[ch] & 0x7F);
-    base = alsa_prog[prog];
-    cnt  = alsa_prog[prog + 1] - base;
-    for (i = 0; i < (int)cnt && n < 2; i++) {
-        const REGION *rg = &alsa_reg[base + i];
-        if (note >= rg->lo && note <= rg->hi) {
-            start_region(ch, note, ch == 9 ? 60 : note, vel, rg);
-            n++;
+    void __huge *blk = halloc(129L * 128L * 4L, 1);
+    unsigned p, i, k;
+    if (!blk) return 0;
+    rtseg = FP_SEG(blk) + (FP_OFF(blk) >> 4);
+    for (p = 0; p < 129; p++)
+        for (k = 0; k < 128; k++) { unsigned __far *e = RTP(p, k); e[0] = RT_NONE; e[1] = RT_NONE; }
+    for (p = 0; p < 129; p++) {
+        unsigned base = alsa_prog[p], cnt = alsa_prog[p + 1] - base;
+        for (i = 0; i < cnt; i++) {
+            const REGION *rg = &alsa_reg[base + i];
+            for (k = rg->lo; k <= rg->hi && k < 128; k++) {
+                unsigned __far *e = RTP(p, k);
+                if (e[0] == RT_NONE) e[0] = base + i;
+                else if (e[1] == RT_NONE) e[1] = base + i;
+            }
         }
     }
+    return 1;
+}
+
+static void note_on(int ch, int note, int vel)
+{
+    int n = 0, prog;
+    unsigned __far *e;
+    if (vel == 0) { note_off(ch, note); return; }
+    if (o_bench) pf_mark();
+    prog = ch == 9 ? 128 : (chprog[ch] & 0x7F);
+    e = RTP(prog, note & 0x7F);
+    if (e[0] != RT_NONE) {
+        unsigned r1 = e[1];
+        if (o_bench) pf_add(5);
+        start_region(ch, note, ch == 9 ? 60 : note, vel, &alsa_reg[e[0]]);
+        n++;
+        if (r1 != RT_NONE) {
+            start_region(ch, note, ch == 9 ? 60 : note, vel, &alsa_reg[r1]);
+            n++;
+        }
+        if (o_bench) pf_mark();
+    }
+    if (o_bench) pf_add(5);
     if (o_verb && n == 0) printf("ch%02d n%03d: no region\r\n", ch, note);
 }
 
 /* ---- SMF --------------------------------------------------------------- */
 #define MAXTRK 32
-#define MAXFILE 64000U
-static unsigned char __far *fb;
+/* The file lives in one huge block: every access goes through fb[p] with a
+ * 32-bit index, and a __huge pointer normalises the segment on each one, so
+ * the size is bounded by free DOS memory rather than a 64K segment.  (The
+ * first version used a __far pointer and stopped at 64000 bytes - a plain
+ * 14-track sequence is 80K.)  MAXFILE is just a sanity ceiling. */
+#define MAXFILE 500000UL
+static unsigned char __huge *fb;
 static unsigned long fsize;
 
 typedef struct {
@@ -227,19 +398,26 @@ typedef struct {
 static TRK tk[MAXTRK];
 static int ntrk;
 
-static unsigned char  rd8 (unsigned long p){ return fb[p]; }
-static unsigned       rd16(unsigned long p){ return ((unsigned)fb[p]<<8)|fb[p+1]; }
+/* Byte access by explicit segment:offset.  Indexing a __huge pointer with a
+ * 32-bit offset costs a runtime normalisation call per byte, and a 186 pays
+ * ~1 ms per MIDI event for that alone (measured: 1.8 ms/event of pure
+ * parsing before this).  halloc memory is paragraph-aligned, so the segment
+ * is just fbseg + (p >> 4). */
+static unsigned fbseg;
+#define FBP(p) ((unsigned char __far *)MK_FP(fbseg + (unsigned)((p) >> 4), (unsigned)(p) & 0x0F))
+static unsigned char  rd8 (unsigned long p){ return *FBP(p); }
+static unsigned       rd16(unsigned long p){ return ((unsigned)rd8(p)<<8)|rd8(p+1); }
 static unsigned long  rd32(unsigned long p)
 {
-    return ((unsigned long)fb[p]<<24)|((unsigned long)fb[p+1]<<16)|
-           ((unsigned long)fb[p+2]<<8)|fb[p+3];
+    return ((unsigned long)rd8(p)<<24)|((unsigned long)rd8(p+1)<<16)|
+           ((unsigned long)rd8(p+2)<<8)|rd8(p+3);
 }
 static unsigned long vlq(unsigned long *p)
 {
     unsigned long v = 0;
     unsigned char c;
     int n = 0;
-    do { c = fb[(*p)++]; v = (v << 7) | (c & 0x7F); } while ((c & 0x80) && ++n < 4);
+    do { c = rd8((*p)++); v = (v << 7) | (c & 0x7F); } while ((c & 0x80) && ++n < 4);
     return v;
 }
 
@@ -266,7 +444,37 @@ int main(int argc, char **argv)
         else if (!strnicmp(p+1,"MIX",3))  mix    = (int)strtol(p+4+(p[4]=='='),0,0);
         else if (!strnicmp(p+1,"PAN",3))  o_pan  = (int)strtol(p+4+(p[4]=='='),0,0);
         else if (!strnicmp(p+1,"TL",2))   o_tl   = (int)strtol(p+3+(p[3]=='='),0,0);
+        else if (!strnicmp(p+1,"FAST",4)) o_fast = 1;
+        else if (!strnicmp(p+1,"BENCH",5)) o_bench = 1;
+        else if (!strnicmp(p+1,"PROF",4)) { o_prof = 1; o_fast = 1; }
+        else if (!strnicmp(p+1,"NOIO",4)) { o_noio = 1; o_fast = 1; }
         else if (p[1]=='V' || p[1]=='v')  o_verb = 1;
+    }
+    calibrate();
+    if (o_verb) printf("timing: spin(100) x%lu per tick, PIT %lu decrements per tick\r\n",
+                       spin100_per_tick, dec_per_tick);
+    if (!build_rtab()) { printf("out of memory (region table)\r\n"); return 1; }
+    if (o_bench) {      /* /BENCH: microseconds per call, by BIOS tick, OPL4 untouched */
+        unsigned long tk0; int k;
+        o_noio = 1;
+        chvol[0] = 100; chprog[0] = 0;
+        tk0 = bios_tick(); for (k = 0; k < 1000; k++) { note_on(0, 60 + (k & 7), 100); note_off(0, 60 + (k & 7)); }
+        printf("note_on+off x1000: %lu us each\r\n", (bios_tick() - tk0) * 55UL);
+        tk0 = bios_tick(); for (k = 0; k < 1000; k++) { note_on(9, 36 + (k & 7), 100); note_off(9, 36 + (k & 7)); }
+        printf("drum on+off x1000: %lu us each\r\n", (bios_tick() - tk0) * 55UL);
+        printf("per call, us: scan %lu | alloc %lu | tone+pan wv %lu | pitch %lu | level %lu | env+keyon %lu\r\n",
+               pf[5] / 4000UL, pf[0] / 4000UL, pf[1] / 4000UL, pf[2] / 4000UL, pf[3] / 4000UL, pf[4] / 4000UL);
+        tk0 = bios_tick(); for (k = 0; k < 1000; k++) (void)now_us();
+        printf("now_us x1000: %lu us each\r\n", (bios_tick() - tk0) * 55UL);
+        tk0 = bios_tick(); for (k = 0; k < 1000; k++) (void)key_waiting();
+        printf("key_waiting x1000: %lu us each\r\n", (bios_tick() - tk0) * 55UL);
+        tk0 = bios_tick(); for (k = 0; k < 1000; k++) (void)voice_alloc();
+        printf("voice_alloc x1000: %lu us each\r\n", (bios_tick() - tk0) * 55UL);
+        { unsigned long q = 12345UL; tk0 = bios_tick(); for (k = 0; k < 1000; k++) q = (q * 27462UL) >> 16; 
+          printf("32-bit mul+shift x1000: %lu us each (%lu)\r\n", (bios_tick() - tk0) * 55UL, q); }
+        { unsigned long q = 123456789UL; tk0 = bios_tick(); for (k = 0; k < 1000; k++) q = q / 480UL + 100000UL;
+          printf("32-bit div x1000: %lu us each (%lu)\r\n", (bios_tick() - tk0) * 55UL, q); }
+        return 0;
     }
     if (!fname) { printf("OPL4MID: no file given (/? for usage)\r\n"); return 1; }
 
@@ -275,20 +483,23 @@ int main(int argc, char **argv)
     if (!f) { printf("cannot open %s\r\n", fname); return 1; }
     fseek(f, 0, SEEK_END); fsize = ftell(f); fseek(f, 0, SEEK_SET);
     if (fsize < 22 || fsize > MAXFILE) {
-        printf("%s is %lu bytes - this build handles 22..%u\r\n",
+        printf("%s is %lu bytes - this build handles 22..%lu\r\n",
                fname, fsize, MAXFILE);
         fclose(f); return 1;
     }
-    fb = (unsigned char __far *)_fmalloc((unsigned)fsize);
-    if (!fb) { printf("out of memory\r\n"); fclose(f); return 1; }
-    {   /* fread into a far buffer, in chunks the small-model call can take */
+    fb = (unsigned char __huge *)halloc((long)fsize, 1);
+    if (!fb) { printf("out of memory (%lu bytes)\r\n", fsize); fclose(f); return 1; }
+    fbseg = FP_SEG(fb) + (FP_OFF(fb) >> 4);
+    {   /* fread into the huge buffer, in chunks the small-model call can take */
         unsigned long got = 0;
         while (got < fsize) {
             unsigned char tmp[512];
+            unsigned char __far *dst;
             unsigned want = (unsigned)((fsize - got) > 512 ? 512 : (fsize - got));
             unsigned n = (unsigned)fread(tmp, 1, want, f);
             if (!n) break;
-            for (i = 0; i < (int)n; i++) fb[got + i] = tmp[i];
+            dst = FBP(got);                     /* one normalisation per chunk */
+            for (i = 0; i < (int)n; i++) dst[i] = tmp[i];
             got += n;
         }
         fsize = got;
@@ -322,17 +533,17 @@ int main(int argc, char **argv)
         ntrk = t;
         printf("parsed %d track(s)\r\n", ntrk);
     }
-    if (list) { _ffree(fb); return 0; }
+    if (list) { hfree(fb); return 0; }
 
     /* ---- OPL4 up ------------------------------------------------------- */
     /* Always open the gate - see VEW2ROM.C: a closed bus floats and has
      * been seen to float to 20h, the real Device ID's value. */
     new2(1); opened = 1;
     id = wv_get(0x02);
-    if ((id & 0xF0) != 0x20) {
+    if ((id & 0xF0) != 0x20 && !o_noio) {
         printf("DevID %02X: no OPL4 at %03X - run VEW21XGO first.\r\n", id, BASE);
         if (opened) new2(0);
-        _ffree(fb); return 1;
+        hfree(fb); return 1;
     }
     wv_put(0x02, 0x00);                                  /* sound generation */
     if (mix < 0) mix = 0; if (mix > 7) mix = 7;
@@ -361,21 +572,36 @@ int main(int argc, char **argv)
         }
         tempo = 500000UL; us = 0; lasttick = 0;
         t0 = now_us();
+        if (!run_t0) run_t0 = bios_tick();
 
         for (;;) {
             int best = -1, done = 1;
             unsigned long bt = 0xFFFFFFFFUL;
             unsigned char st;
+            unsigned long pa = 0, pb = 0;
 
+            if (o_prof) pa = now_us();
             for (t = 0; t < ntrk; t++)
                 if (!tk[t].done) { done = 0; if (tk[t].tick < bt) { bt = tk[t].tick; best = t; } }
             if (done || best < 0) break;
-            if (kbhit()) { (void)getch(); goto stop; }
+            if (key_waiting()) { (void)getch(); goto stop; }
 
-            us += ((bt - lasttick) * tempo) / division;
+            {   /* microseconds per tick, x256, is fixed between tempo changes:
+                 * one 32-bit divide per tempo event instead of one per event.
+                 * A 186 spends ~200 us in Watcom's software 32-bit divide. */
+                unsigned long d = bt - lasttick;
+                if (tempo != uspt_tempo) {
+                    uspt_tempo = tempo;
+                    uspt256 = (tempo << 8) / division;
+                    uspt_maxd = uspt256 ? 0xFFFFFFFFUL / uspt256 : 0;
+                }
+                if (d <= uspt_maxd) us += (d * uspt256) >> 8;
+                else                us += (d * tempo) / division;
+            }
             lasttick = bt;
+            if (o_prof) { pb = now_us(); prof_a += pb - pa; }
             wait_until(us);
-            if (kbhit()) { (void)getch(); goto stop; }
+            if (key_waiting()) { (void)getch(); goto stop; }
 
             st = rd8(tk[best].pos);
             if (st & 0x80) tk[best].pos++; else st = tk[best].rs;
@@ -397,11 +623,15 @@ int main(int argc, char **argv)
                 int ch = st & 0x0F, a, b;
                 switch (st & 0xF0) {
                 case 0x80: a = rd8(tk[best].pos++); b = rd8(tk[best].pos++);
-                           note_off(ch, a); break;
+                           n_off++; note_off(ch, a); break;
                 case 0x90: a = rd8(tk[best].pos++); b = rd8(tk[best].pos++);
-                           note_on(ch, a, b); break;
+                           if (b) n_on++; else n_off++;
+                           if (o_prof) { unsigned long pc = now_us(); note_on(ch, a, b); prof_c += now_us() - pc; }
+                           else note_on(ch, a, b);
+                           break;
                 case 0xA0: tk[best].pos += 2; break;
                 case 0xB0: a = rd8(tk[best].pos++); b = rd8(tk[best].pos++);
+                           n_cc++;
                            if (a == 7) chvol[ch] = b;
                            if (a == 120 || a == 123) {
                                int v; for (v = 0; v < NVOICE; v++)
@@ -416,13 +646,21 @@ int main(int argc, char **argv)
             }
             if (tk[best].pos >= tk[best].end) tk[best].done = 1;
             else if (!tk[best].done) tk[best].tick += vlq(&tk[best].pos);
+            if (o_prof) prof_b += now_us() - pb;
         }
     } while (loop);
 
 stop:
     all_off();
     if (opened) new2(0);
-    _ffree(fb);
-    printf("done.\r\n");
+    hfree(fb);
+    printf("done.  %lu events, worst dispatch lateness %lu.%lu ms, %lu events >10 ms late\r\n",
+           ev_n, late_max / 1000UL, (late_max % 1000UL) / 100UL, late_n);
+    printf("       %lu.%lu s of CPU%s\r\n",
+           (bios_tick() - run_t0) * 55UL / 1000UL, ((bios_tick() - run_t0) * 55UL / 100UL) % 10UL,
+           o_noio ? " (no OPL4 I/O)" : o_fast ? " (no waiting)" : "");
+    if (o_prof)
+        printf("       head %lu ms, decode+dispatch %lu ms (of which note_on %lu ms); on %lu off %lu cc %lu\r\n",
+               prof_a / 1000UL, prof_b / 1000UL, prof_c / 1000UL, n_on, n_off, n_cc);
     return 0;
 }
