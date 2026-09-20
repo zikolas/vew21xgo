@@ -76,3 +76,19 @@ to use `VEW21XGO.EXE`. Each builds the same way: `C:\WATCOM\BLD <name>`.
   PC-9801N-J04, the PC-98 sibling of this card: same ASIC + codec, no FM
   synth fitted, single config entry at 0xF40 with PC-98 IRQ numbering,
   and no MANFID tuple at all.
+
+- **JSCPROBE.C** — the CF-JSC101 bring-up probe: power with RESET held,
+  read the CIS head, program any of the ASIC's four config blocks
+  (`/COR= /COR1= /COR2= /IOBASE2= /COR3=`), codec ID, OPL timer test,
+  `/DING`, `/SWEEP` (prints each index before touching it — 30h stalls
+  the bus), `/KEEP` and `/OFF`. Found that block 1 (attribute 0x440)
+  carries the OPL3 and the codec's clock.
+
+- **JSCDUMP.C** — interrupt-safe snapshot of what another enabler left
+  behind (PCIC registers, I/O windows and their ports, codec I0–I31,
+  attribute 0x000–0x1FF and 0x400–0x4FF through a borrowed window).
+  Run under the vendor's SNSCDOSV.SYS + IBM Card Services, it exposed the
+  four-block layout that VEW21XGO 2.8 replicates.
+
+- **CIS_JSC101.BIN** — byte-exact 512-byte CIS image from the CF-JSC101
+  (CONFIG and CFTABLE sit behind a LONGLINK_A at attribute 0x94).

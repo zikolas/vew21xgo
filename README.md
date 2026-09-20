@@ -1,401 +1,134 @@
-# VEW21XGO — a DOS enabler for the CF-VEW211 / VEW212 / JSC101 / PC-9801N-J04 PCMCIA sound cards
+# VEW21XGO — a DOS enabler for the Panasonic CF-VEW211 family
 
-A single-command DOS **enabler** for the Matsushita/Panasonic **CF-VEW211**
-PCMCIA sound card (1994 — CS4231A WSS codec + YMF262 OPL3) and its
-relatives: the NEC-badged PC-98 sibling **PC-9801N-J04** (same MEI ASIC and
-codec, **no FM synth**, since 2.4), the **CF-VEW212** "Sound Card PRO"
-(OPL4, since 2.5) and, since 2.8, the **CF-JSC101 "Sound SCSI Card"**
-(the same codec and an OPL3 next to a SCSI controller — the sound half is
-enabled, the SCSI half left alone). One ~14 KB `.COM`, three host
-backends, auto-detected.
+One `.COM` brings up the Matsushita/Panasonic CF-VEW211 PCMCIA sound card
+and its relatives with no vendor software: a CS4231A WSS codec plus FM,
+three host backends, auto-detected.
 
-The third family member, the **CF-VEW212 "Sound Card PRO"** (related ASIC, OPL4
-wavetable), is **recognized but deliberately not configured** as of 2.3:
-recon showed its working configurations are not the one its CIS declares
-(see [The cards](#the-cards) below), and this enabler cannot set them
-yet. A healthy 212 is identified, reported, and declined — support is in
-progress.
+| Card | MANFID | Configured as |
+|---|:---:|---|
+| CF-VEW211 | `0032/0001` | codec at `530` (or `E80`/`F40`/`604` via `/IO`), OPL3 at `388` |
+| CF-VEW212 "Sound Card PRO" | `0032/0501` | codec at `530` + OPL4 FM/wavetable at `388–38D`, on its undeclared working index `23h`; `/MIDI` switches to the vendor MPU-401 personality |
+| CF-JSC101 "Sound SCSI Card" | `0032/0701` | codec at `530` + OPL3 at `388`; the SCSI half is left unconfigured |
+| NEC PC-9801N-J04 | none (VERS_1 string) | codec at `F40`, no FM fitted |
 
-| Mode | Host | Status |
-|---|---|---|
-| `/PCIC` | Intel 82365-class controllers (IBM PC110, ThinkPad 235…) — no Card Services, no Socket Services needed | the 1.x-proven path, ported |
-| `/CS` | any PCMCIA Card Services 2.1 stack (SystemSoft lineage) | registers as a CS client and **stays TSR**: hot-plug configures on insert, a later run live-reconfigures through the resident copy, `/OFF` releases |
-| `/OB` | HP OmniBook 300/425/430 ROM Socket Services, no CS needed | **verified live on a 425** — polite window allocator, all the probed SS quirks baked in (incl. the 10-bit I/O window aliasing this card needs) |
+All four share the MEI ASIC and codec. On the 212 and JSC101 the FM
+enters the codec's line input, which the enabler un-mutes; the JSC101's
+ASIC has four configuration register sets 20h apart (codec, OPL3 plus
+the codec's clock, SCSI, unknown), so its COR index is written twice.
+The 211's FM is summed after the codec and has no volume control in
+hardware (see FMVOL). A card whose CIS EEPROM has failed reads as a
+uniform fill; it is reported, and configured from built-in knowledge only
+under `/FORCE /S=n`, never written (see VEWCIS).
 
-With no mode switch the host is auto-detected: Card Services first (if a CS
-arbiter is loaded we must go through it), then the OmniBook `SS` signature,
-then an 82365 probe at 3E0h.
+Backends, in auto-detect order:
 
-It also still handles its founding case: **a card whose CIS is dead** (a
-failed EEPROM load — the tuple region reads one stuck fill byte, so no
-CIS-matching software can ever identify it). Such a card is recognized by
-its uniform-fill signature and reported — but because a blank CIS is *not*
-proof the card is a VEW21x (any card's failed EEPROM reads identically),
-it is only configured under **`/FORCE /S=n`**, from the built-in
-configuration, **read-only**. The companion `VEWCIS` tool repairs the CIS
-permanently, in software (see below).
-
-Three tools ship here, each doing one job:
-
-| | |
-|---|---|
-| **`VEW21XGO`** | brings the card up — this is the one you need |
-| **`VEWCIS`** | repairs a 211 whose CIS EEPROM has failed, permanently and in software |
-| **`FMVOL`** | gives the FM synth the volume control the hardware does not have |
-
-Clean-room: built from healthy cards' own CIS dumps, the public Intel
-82365SL register set, the PCMCIA CS/SS specs (RBIL + the SystemSoft
-CardSoft technical guide), live-probed OmniBook Socket Services behavior,
-and the public Crystal CS4231A + OPL FM programming models. No vendor
-driver code.
+- `/CS` — any PCMCIA Card Services 2.1 stack. Registers as a client and
+  stays resident: configures on hot-plug, a later run reconfigures through
+  the resident copy, `/OFF` releases it.
+- `/OB` — HP OmniBook 300/425/430 ROM Socket Services, no Card Services
+  needed. Verified on a 425; user sockets 1–2 only.
+- `/PCIC` — Intel 82365-class controllers programmed directly (IBM PC110,
+  ThinkPad 235…).
 
 ## Usage
-
-Run it once. In PCIC and OB modes the configuration sticks in the
-controller and the program exits; in CS mode it stays resident and also
-configures the card on hot-plug. Then point your game at **AdLib at 388**
-(211; the FM-less J04 offers the WSS codec instead — see below):
 
 ```
 VEW21XGO /T
 ```
 
-With no `/S`, VEW21XGO scans the sockets and configures the first
-CF-VEW211 or PC-9801N-J04 it finds, tagged `(auto)` in its output. (A card
-with a dead/blank CIS is reported but not configured unless you add
-`/FORCE`; a CF-VEW212 is reported and declined — see above.)
-
-On a **PC-9801N-J04** the enabler configures the card's single declared
-entry automatically: codec at **`F40` (registers at `F44`)**, no FM window
-(`/IO` is overridden and `/NOFM` is implied — the card has no FM silicon;
-`/T` therefore stays silent, and FMVOL has nothing to do). Point software
-at the WSS codec, or run an SB emulator against it (`SBEBASE=F40` for
-VSBPCMCIA).
+Run it once; the configuration sticks. Point games at AdLib at `388`
+(not on the J04), or run [VSBPCMCIA](https://github.com/zikolas/vsbhda-pcmcia)
+against the codec for Sound Blaster emulation with the real FM chip.
 
 ```
-VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T[ONE]] [/SPKR]
-         [/NOFM] [/S=n] [/W=D000] [/F[ORCE]] [/OFF] [/?]
+VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T] [/SPKR] [/NOFM]
+         [/MIDI] [/S=n] [/W=D000] [/FORCE] [/OFF] [/V] [/?]
 
-  /IO=hex   codec base — 530 (default) / E80 / F40 / 604 (picks the
-            matching COR index; codec registers at base+4, OPL3 always
-            388).  The J04 declares only the F40 config: /IO is
-            overridden to F40 for it.
-  /I=dec    IRQ to route — 7, 9, 10 or 11 only (level-mode cards;
-            default 0 = none, FM needs no IRQ)
-  /VOL=dec  DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
-            card's output amp) .. 63; default 24 = -36 dB by ear
-            (line-out users into amplified speakers may prefer /VOL=8)
-  /TONE     play a short FM test tone after enabling (a quiet bell ding —
-            deliberately so, since the card's FM has no hardware volume;
-            see FMVOL below if you want one)
-  /SPKR     also route the card's audio to the host's internal speaker
-            (CCSR Audio bit -> #SPKR pin; PCIC mode adds the bridge-side
-            route; mono, 1-bit, harsh by nature)
-  /NOFM     don't claim the 388h FM window
-  /S=dec    socket (PCIC 0-7; OB 1-2 — 3/4 hold the OmniBook's permanent
-            storage cards and are never probed; CS: pin to this socket)
-  /W=hex    attribute-window segment for the CIS/COR access (PCIC;
-            default D000, auto-relocates if another card is mapped there)
-  /FORCE    configure without the CIS identity check — also the only way
-            to enable a card whose CIS is dead/blank (needs /S)
-  /OFF      PCIC: power the socket down; CS: release + go dormant
-  /V        show the working detail: CIS strings, COR, codec ID, mixer
-  /?        show this usage (also /H, /HELP)
+  /IO=hex   codec base 530 (default) / E80 / F40 / 604 — 211 only; the
+            212 and JSC101 are fixed at 530, the J04 at F40
+  /I=dec    IRQ 7, 9, 10 or 11 (level mode; default none — FM needs none)
+  /VOL=dec  DAC attenuation, 1.5 dB per step, 0..63 (default 24 = -36 dB)
+  /T        play a short FM test tone after enabling
+  /SPKR     also route audio to the host speaker (#SPKR pin; mono, 1-bit)
+  /NOFM     do not claim the 388 FM window
+  /MIDI     212 only, PCIC only: finish on index 26h (MPU-401 at 330 +
+            OPL4) for the vendor OPL4TSR/OPL4DRV stack; implies /I=9
+  /S=dec    socket (PCIC 0-7, OB 1-2, CS: probe only this one)
+  /W=hex    attribute-window segment for CIS/COR access (PCIC; default
+            D000, moved automatically if another card is mapped there —
+            keep it out of your memory manager's UMB range)
+  /FORCE    skip the CIS identity check; the only way to enable a dead-CIS
+            card (needs /S)
+  /OFF      PCIC: power the socket down; CS: release and go dormant
+  /V        show the working detail: CIS strings, CORs, codec ID, mixer
 ```
 
-Note DOS runs `.COM` before `.EXE`: drop `VEW21XGO.COM` next to the old
-1.x `.EXE` and the unified enabler takes over the name (delete or rename
-the `.EXE` to avoid confusion).
+DOS runs `.COM` before `.EXE`, so this takes over from the old 1.x `.EXE`
+if both sit in one directory.
 
-## Features
+## VEWCIS — repairing a dead CIS
 
-| | Feature |
-|:---:|---|
-| ✅ | **Three host backends in one binary** — direct PCIC, Card Services client (hot-plug TSR), OmniBook Socket Services |
-| ✅ | **CF-VEW212 protected** — recognized by MANFID and declined with an explanation (its working configs are undeclared in its CIS; enabling support is in progress) |
-| ✅ | **NEC PC-9801N-J04 supported** (2.4) — the PC-98 sibling ships a CIS with **no MANFID tuple**, so it is identified by its VERS_1 product string instead; codec-only (no FM), fixed at `F40` |
-| ✅ | **OPL3 FM synthesis** at the standard AdLib port `0x388` — games just work |
-| ✅ | **WSS codec** (CS4231A) at `0x530` / `0xE80` / `0xF40` / `0x604` |
-| ✅ | **Dead-CIS cards recognized** — flagged by their fill signature; configured from built-in knowledge only under `/FORCE`, never written to |
-| ✅ | **PCM volume** (`/VOL`) — DAC attenuation in 1.5 dB steps |
-| ✅ | **Mixer un-mute** — the codec powers up silent; write-verified, retried ms-paced (cold-codec quirk) |
-| ✅ | **Host-speaker audio** (`/SPKR`) — via the PCMCIA #SPKR pin (1-bit, lo-fi by nature) |
-| ✅ | **FM test tone** (`/T`) — instant audible proof the card is alive |
-| ✅ | **FM volume** — the card has none in hardware; `FMVOL` supplies it by rescaling OPL levels in flight (see [`doc/FMVOL.md`](doc/FMVOL.md)) |
-| ✅ | **Permanent CIS repair** — `VEWCIS /211 /BURN` programs a known-good CIS back into the card's EEPROM (**211 only** since VEWCIS 2.3 — see below) |
-
-## VEWCIS — the standalone CIS repair tool
-
-`VEWCIS.EXE` heals the CIS and touches nothing else — no COR write, no I/O
-mapping, no mixer. The enabler itself never writes the CIS (by design,
-since 2.1): repair lives here, and because **a dead card cannot say which
-model it is**, every operation that writes the shadow requires the model
-on the command line:
+`VEWCIS.EXE` writes a known-good CIS back into a CF-VEW211 whose EEPROM
+load has failed, and nothing else. The model must be given, because a
+dead card cannot say what it is:
 
 ```
-VEWCIS /211            volatile heal: inject the selected CIS image into
-                       the shadow; card left powered, un-configured,
-                       self-describing until next power-down
-VEWCIS /211 /BURN      PERMANENT repair: power-cycles to read the true
-                       EEPROM state, injects if dead, pulses the ASIC's
-                       EEPROM commit strobe (attr 0x204 bit0 — the
-                       factory programming hook found in recon), then
-                       power-cycles again and verifies the EEPROM reloads
-                       the pristine CIS on its own.  Refuses to burn a
-                       card that is already healthy.
-VEWCIS /211 /RESTORE   like /BURN but unconditional: burns the selected
-                       reference image even over a valid CIS (undo test
-                       images / factory-reset to the known-good dump)
-VEWCIS /?              show usage (also /H, /HELP)
+VEWCIS /211            volatile heal: into the RAM shadow, until power-down
+VEWCIS /211 /BURN      permanent: commit the image to the EEPROM, verify
+VEWCIS /211 /RESTORE   burn the reference image even over a valid CIS
 ```
 
-> ⚠️ **`/BURN` and `/RESTORE` write binding, permanent changes to the
-> card's on-card EEPROM** — not the volatile RAM shadow. They are only
-> reversible if you hold a correct byte-exact CIS image for *that exact
-> card*. There is no undo.
->
-> **This is not CF-VEW211/212-specific.** The EEPROM commit strobe (attr
-> `0x204`) is a feature of the card's **MEI DA65646 ASIC**, and other
-> cards built on that same ASIC respond to it identically — for example
-> the NEC **PC-9801N-J04** sound card (same MEI ASIC + CS4231A, different
-> identity and config). VEWCIS recognises a *healthy* card by its MANFID,
-> but a card whose CIS is **dead reads as a uniform fill no matter what
-> card it is** — so a `/BURN` or `/RESTORE` aimed at a dead card you have
-> **not independently confirmed to be a CF-VEW211/212** can permanently
-> stamp a *different* MEI-ASIC card with a VEW211/212 identity.
->
-> ⏱️ **Never conclude a CIS is dead from one quick read.** Attribute
-> memory lags socket power-up by a **host-specific** settle time (PC110
-> ~30 ms, ThinkPad 235 ~110 ms measured) and the PCIC READY bit can
-> assert *before* the CIS reads true — a too-early read returns an
-> all-`FF` wall for **any** card. Since 2.4, VEWCIS (and the enabler)
-> gate every post-power CIS read on the data itself (a valid CIS never
-> begins with `FF`), so a "DEAD" verdict is trustworthy; older versions
-> could false-report a healthy card as dead on slower hosts. If in
-> doubt, re-read on a second machine before believing any tool.
->
-> Before burning: be sure the card is a CF-VEW211. If in any doubt,
-> **capture its current CIS first** (a raw attribute-memory dump) and keep
-> it, and prefer the **volatile heal** (`/211` with no `/BURN`) — that
-> leaves the EEPROM untouched and evaporates on power-down.
->
-> 🚫 **CF-VEW212: all write support was removed in VEWCIS 2.3.** The
-> 212's ASIC is *not* the 211's — its config register file differs (attr
-> `0x204`/`0x206` don't read back at all) and **no commit or erase
-> mechanism has ever been demonstrated on it**, so a "repair" would fire
-> 211 reflexes at unknown registers on a rare card. VEWCIS recognises a
-> healthy 212 by MANFID solely to **refuse every write action** on it,
-> and `/212` prints a refusal. If a 212 CIS ever genuinely dies,
-> investigate it deliberately; the byte-exact reference image is kept in
-> `probes/CIS_VEW212.BIN`.
+> **`/BURN` and `/RESTORE` are permanent and only reversible with a
+> byte-exact image of that card.** The commit strobe belongs to the MEI
+> ASIC, so a dead J04, 212 or JSC101 would accept a 211 image and be
+> stamped with the wrong identity. Never conclude a CIS is dead from one
+> quick read (attribute memory lags socket power by up to ~110 ms on some
+> hosts; VEWCIS and the enabler gate on the data since 2.4). VEWCIS
+> refuses all writes on a 212.
 
-The 211 unit this project was written for was successfully repaired
-exactly that way (the first time by accident — long story, documented in
-`doc/ASIC.md`).
+## FMVOL — FM volume for the 211
 
-The embedded 211 reference image is a **byte-exact capture from our own
-healthy unit** (`probes/CIS_211_PRISTINE.BIN`; the older third-party dump
-is kept as `probes/CIS_GOOD.BIN` for history, and the 212 capture as
-`probes/CIS_VEW212.BIN` — reference only, no longer embedded).
-
-## FMVOL — FM volume for a card that has none
-
-The card's FM synth is **deafening, and has no volume control at all**.
-The OPL3 feeds a YAC512 DAC that is summed into the output amp *after*
-the codec, so no mixer register can reach it — and neither chip has an
-attenuator. That is design rather than a fault: a second healthy card and
-Panasonic's own driver are equally loud, and an exhaustive hunt through
-every vendor register, the hidden bank, the codec's XCTL pins and all the
-I/O ports turned up nothing (`doc/ASIC.md`).
-
-`FMVOL.DLL` supplies one anyway, from the other side. Loaded into
-JEMM386, it traps the OPL ports and rescales every **Total Level** write
-bound for a *carrier* operator before it reaches the chip. Modulator
-writes pass through untouched — attenuating a modulator changes the
-*timbre*, not the volume — so games sound exactly as they should, just
-quieter, by a number you choose.
-
-```
-FMGO                  enable the card, load JEMM386, trap at 16 steps
-FMGO 32               ... at 32 steps instead
-
-JLOAD FMVOL.DLL 24    load it directly, 24 steps
-JLOAD -u FMVOL.DLL    unload; the card goes back to its own levels
-```
-
-Attenuation is `0`–`63` in steps of 0.75 dB — **8 ≈ −6 dB, 16 ≈ −12 dB,
-32 ≈ −24 dB**. `0` traps without scaling, which makes a clean A/B. There
-is no live control: changing the level means unload and load again.
-
-> ⚠️ **Real-mode games only.** A Jemm loadable module traps V86 and
-> real-mode guests. Games running under a DOS extender — DOS/4GW,
-> DOS32A, PMODE/W — execute in protected mode and bypass the trap
-> entirely, so FMVOL will appear to do nothing. If the game prints an
-> extender banner as it starts, it is out of reach. Monkey Island,
-> Wolfenstein 3D, Commander Keen and the Sierra titles are all fine;
-> DOOM, Duke Nukem 3D and Descent are not.
-
-Needs `JEMM386.EXE` and `JLOAD.EXE` from the
-[Jemm package](https://github.com/Baron-von-Riedesel/Jemm), which are not
-shipped here. The full story — the carrier rules, what was verified by
-ear, and the route to catching protected-mode games too — is in
-[`doc/FMVOL.md`](doc/FMVOL.md).
-
-## The cards
-
-| Card | MANFID | Config index | Codec base | FM |
-|---|:---:|:---:|:---:|:---:|
-| CF-VEW211 | `0032/0001` | `0x20` (default) | `0x530` | `0x388` |
-| | | `0x21` | `0xE80` | `0x388` |
-| | | `0x22` | `0xF40` | `0x388` |
-| | | `0x23` | `0x604` | `0x388` |
-| CF-VEW212 | `0032/0501` | `0x20` (declared) | `0x530` | `0x388` |
-| CF-JSC101 | `0032/0701` | `0x20`, written twice (see below) | `0x530` | `0x388` |
-| PC-9801N-J04 | *none* — VERS_1 `"NEC"`, `"PC-9801N-J04"` | `0x22` (sole entry) | `0xF40` | *no FM silicon* |
-
-Config registers (COR + CCSR) live at attribute offset `0x200` on all of
-them except the JSC101, whose CIS puts them at `0x420`.
-The COR reads back with the LevlREQ bit pinned high — these cards only do
-level-mode interrupts, hence the `{7, 9, 10, 11}` IRQ set from the CIS.
-
-**Digital audio works on the 211 — without DMA.** The CS4231A accepts PIO
-sample transfer, and `probes/VEWPLAY.C` is a working PIT-paced `.WAV`
-player (see `probes/README.md` for the protocol gotchas that make it
-work). **FM has no hardware volume control** on the 211 — the OPL3's
-audio (YMF262 → YAC512 DAC) is summed after the codec, and an exhaustive
-register hunt found nothing that attenuates it (`doc/ASIC.md`).
-
-**The J04 is the family's PC-98 export, minus the FM.** Same MEI ASIC
-and CS4231A codec as the 211, aimed at NEC's PC-98 laptops — where the
-native WSS home is `F40`, which is exactly (and only) what its CIS
-declares: one config entry, COR index `0x22`, I/O `F40–F49` on 10 address
-lines, and **no MANFID tuple**, which is why it is matched by VERS_1
-string. Index `0x22`/`F40` is the *same* config the
-211's table maps to that base — the family decode is shared silicon. No
-FM chip is fitted; the enabler claims no `388` window for it. Digital
-audio and the `#SPKR` host-speaker route both verified on real hardware
-(Toshiba T2130CT, SB emulation via VSBPCMCIA at `SBEBASE=F40`). The
-byte-exact CIS capture is `probes/CIS_PC98_J04.BIN`.
-
-**The 212 is a different animal wearing the 211's CIS.** Its single
-declared config entry is byte-identical to the 211's default — and on
-real hardware it is **dead**: with COR index `0x20` set, nothing answers
-at the codec or FM ports. Live recon against the period vendor stack
-(`doc/DUMP212-VND-IDLE.TXT` / `-POST.TXT`, captured with
-`probes/VEW2DUMP.C`) shows the card actually running on an **undeclared
-COR index `0x26`**: an MPU-401 UART at `330` plus its **OPL4 (YMF278)**
-FM+wave block at `388–38D` (wave register pair at `38C/38D`, observed
-live during MIDI playback), on 16-bit autosized windows — and no codec
-window at all. The vendor's Windows 95 INF additionally attests a codec
-configuration on another undeclared index. A passive register sweep
-(`probes/VEW2SCAN.C`) confirmed the ASIC differs from the 211's (config
-file is COR+CCSR only; the 211's vendor registers at `0x204`–`0x208`
-don't exist). Bringing the 212 up properly on those real configurations
-is the current work — until then the enabler declines it rather than
-configure a layout the card does not serve.
-
-**The JSC101 is the family's sound-plus-SCSI card, and its ASIC has four
-configuration blocks.** MANFID `0032/0701`, VERS_1 `"Panasonic"`, `"Sound
-SCSI Card"`, `"CF-JSC101"`. Same CS4231A at `530` (WSS block, codec
-registers at `534`), an OPL3 at `388` whose analog output enters the
-codec's **line input** (the 212's topology, so it gets the same un-mute),
-and a 16-port SCSI block. Two things make it different. Its CIS hides the
-CONFIG and CFTABLE tuples behind a `LONGLINK_A` (the enabler follows one
-link since 2.8; the config base is `0x420`). And the ASIC carries **four
-independent sets of configuration registers, 0x20 apart** — `0x420`
-codec, `0x440` OPL3 *and the codec's clock*, `0x460` SCSI (index `0x31`
-plus IOBASE), `0x480` unknown. They read identically cold, which makes
-them look like aliases, but with only block 0 written the codec maps and
-then sits in INIT forever with `388` dead — the failure a one-COR enabler
-sees. So the enabler writes index `0x20` into **both** `0x420` and `0x440`
-(`COR2` in the summary); the SCSI block stays unconfigured. Under Card
-Services the second block is written with `AccessConfigurationRegister`
-at offset `0x20`, which is how the vendor's own CS client does it (it
-knows nothing of the block either). Vpp is not needed although the vendor
-requests it. Recipe source: the vendor's DOS enabler run under IBM Card
-Services and read back off the hardware, plus its INF/PRM/README data
-files — no driver code was examined. Verified on the PC110 with `/PCIC`
-and `/CS`: FM tone and PIO PCM by ear through both the phones jack and
-the `#SPKR` route, then **DOOM with digital SFX and FM music** through
-VSBPCMCIA's VEW211 backend (`VSBPCM /CARD:VEW211 /BASE530` after
-`VEW21XGO /PCIC /IO=530 /VOL=16 /W=DC00`, the GOVEW212 recipe with the
-window moved to the JemmEx exclusion). `/OB` is untested. The byte-exact
-CIS capture and the probes live in the `jsc101-recon` folder for now.
-Beware: COR index `0x30` in block 0 stalls the card's bus until a power
-cycle.
-
-## History: the 1.x C enabler
-
-The original PCIC-only point enabler this project grew from lives in
-[`legacy/VEW21XGO.C`](legacy/) (Open Watcom), kept for reference — see
-`legacy/README.md`. Its versions 1.3–1.4 healed a dead CIS automatically
-on every run; that behavior moved to `VEWCIS` when the 2.x assembly
-enabler took over (an enabler silently writing a possibly-wrong identity
-into a card it cannot actually identify stopped being charming once a
-second card model existed). The compiled 1.x `.EXE` is no longer
-committed; build it from the archived source if you want it.
-
-## Documentation
-
-* [`doc/FMVOL.md`](doc/FMVOL.md) — **FM volume**: why the card has no
-  hardware control over its FM synth, and the port-trapping module that
-  gives it one anyway.
-* `doc/ASIC.md` — full software-visible map of the 211's MEI DA65646 ASIC
-  (address decode, CIS shadow behaviour, config registers including three
-  undeclared vendor registers — one of which is the **EEPROM commit
-  strobe** behind `/BURN` — COR index decode quirks, audio architecture),
-  plus the raw probe output and a PDF rendering.
-* `probes/CIS_VEW212.TXT` — the CF-VEW212 CIS capture, decode, and the
-  OPL4 recon plan.
-* `probes/` — the diagnostic programs that established all of the above.
-
-## Build
-
-The unified enabler (NASM, host or on-box):
-
-```
-./build.sh       (or: nasm -f bin VEW21XGO.ASM -o VEW21XGO.COM)
-```
-
-VEWCIS (Open Watcom, 16-bit real mode):
-
-```
-BUILD VEWCIS     (or just BUILD — VEWCIS is the default target)
-```
-
-The legacy 1.x enabler builds the same way from `legacy/VEW21XGO.C`.
-
-FMVOL, the Jemm module (JWasm + Open Watcom `wlink`):
-
-```
-./fmbuild.sh     on the host — needs no DOS box at all
-FMBLD.BAT        on a DOS box — needs JWASMD, and JLM.INC from the Jemm package
-```
-
-Either way the signature is patched from `PE` to `PX` afterwards, which
-is what JLOAD accepts. Build it *before* loading JEMM386: JWASMD wants a
-DPMI host and cannot get one once JEMM is resident.
+The 211's FM has no volume control in hardware. `FMVOL.DLL`, a Jemm
+loadable module, traps the OPL ports and rescales carrier Total Level
+writes in flight, 0–63 steps of 0.75 dB (`FMGO`, or `JLOAD FMVOL.DLL 24`;
+`JLOAD -u` unloads). Real-mode and V86 games only: DOS-extender games
+bypass it. Details in [`doc/FMVOL.md`](doc/FMVOL.md). On the 212 and
+JSC101 the FM passes through the codec's line input instead, so its
+gain register (I18/I19) is the volume control there.
 
 ## The wavetable synth (synth/)
 
-The CF-VEW212's OPL4/YRW801 wavetable, driven directly — no vendor
-software, no MPU-401 hardware, and no giving up the codec:
+`OPL4SYN` stays resident and turns the 212's OPL4/YRW801 into a General
+MIDI synth for games: with [MPUSHIM](https://github.com/zikolas/mpushim)
+trapping an MPU-401 at 330 it plays alongside SB digital audio from one
+boot. `OPL4MID` plays a .MID file on it from the command line. See
+[synth/README.md](synth/README.md).
 
-- **synth/OPL4MID** plays a General MIDI .MID file from the command
-  line.
-- **synth/OPL4SYN** stays resident and turns the wavetable into a GM
-  synth for games: [MPUSHIM](https://github.com/zikolas/mpushim) traps
-  an MPU-401 at 330h in every trap world (real mode/V86, 16-bit and
-  32-bit protected mode) and feeds it each MIDI byte. DOOM, Tyrian,
-  Monkey Island and DOSMID all play the YRW801 this way from one boot —
-  alongside SB digital audio via VSBPCM, since index 23h keeps the
-  codec.
+## Build
 
-The quick chain, after `VEW21XGO /PCIC`: load `OPL4SYN`, then the
-MPUSHIM stack with `/SYNTH`. Ready-made launchers (GOWMIDI, GOW32,
-GOW16) live in mpushim's `go/` directory; details, switches and
-provenance in [synth/README.md](synth/README.md). Build with Open
-Watcom (wcc -ms, C89).
+```
+./build.sh          VEW21XGO.COM (NASM, host or on-box)
+BUILD VEWCIS        VEWCIS.EXE (Open Watcom, 16-bit real mode)
+./fmbuild.sh        FMVOL.DLL (JWasm + wlink on the host; FMBLD.BAT on a DOS box)
+```
+
+The synth builds with Open Watcom (`wcc -ms`, C89); the 1.x C enabler
+this project grew from is archived in `legacy/`.
+
+## Documentation
+
+- [`doc/ASIC.md`](doc/ASIC.md) — the 211's MEI DA65646 ASIC: decode,
+  CIS shadow, config and vendor registers, the EEPROM commit strobe.
+- [`doc/FMVOL.md`](doc/FMVOL.md) — the FM volume problem and the module.
+- [`probes/README.md`](probes/README.md) — every probe that established
+  the above, and the byte-exact CIS images of all four cards.
+- [`probes/CIS_VEW212.TXT`](probes/CIS_VEW212.TXT) — the 212 recon.
+
+Clean-room: the cards' own CIS dumps, the public Intel 82365SL register
+set, the PCMCIA CS/SS specs (RBIL, the SystemSoft CardSoft technical
+guide), live-probed OmniBook Socket Services, the public CS4231A and OPL
+programming models, and vendor enablers run and read back off the
+hardware. No vendor driver code was read.
 
 ## License
 
