@@ -1,5 +1,5 @@
 /* VEWCIS.C - CF-VEW211 CIS repair tool: heal the CIS, NOTHING else.
- * Copyright (c) 2026 zikolas. MIT License.
+ * Copyright (c) 2026 zikolas. GNU General Public License v2 - see LICENSE.
  *
  * The minimal companion to VEW21XGO: finds the card, and if its CIS reads
  * as a dead fill wall (failed EEPROM load), injects the selected card's

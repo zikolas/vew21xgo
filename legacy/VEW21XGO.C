@@ -1,5 +1,5 @@
 /* VEW21XGO.C - Panasonic CF-VEW211 PC Card sound DOS point enabler.
- * Copyright (c) 2026 zikolas. MIT License.
+ * Copyright (c) 2026 zikolas. GNU General Public License v2 - see LICENSE.
  *
  * Clean-room: built from a known-good CF-VEW211 CIS dump, the public Intel
  * 82365SL PCIC register set, and the public AD1848/CS4231 codec + OPL FM

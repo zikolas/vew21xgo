@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build VEWSPY.DLL on the host, no DOS box needed (see fmbuild.sh).
+# Build VEWSPY.DLL on the host, no DOS box needed (see ../fmvol/fmbuild.sh).
 set -e
 cd "$(dirname "$0")"
 JWASM=${JWASM:-$HOME/tools/jwasm-src/build/GccUnixR/jwasm}

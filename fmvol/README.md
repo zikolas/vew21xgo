@@ -44,7 +44,7 @@ The last two matter most: this is **design, not damage**. The card was
 built this way. (The Windows driver's "FM volume" slider turned out to be
 software scaling the very registers described below.)
 
-Full detail in [`ASIC.md`](ASIC.md).
+Full detail in [`../doc/ASIC.md`](../doc/ASIC.md).
 
 ## The one remaining lever
 
@@ -232,7 +232,6 @@ or disassembled.
 Interfaces are used for interoperability only. Nothing here is derived
 from the GPL-licensed SBEMU or vsbhda sources, which solve a related
 problem with the same host software — this is our own implementation
-against the same published interfaces, so that the MIT terms above are
-accurate.
+against the same published interfaces.
 
-MIT — see [LICENSE](../LICENSE).
+GPL v2 — see [LICENSE](../LICENSE).

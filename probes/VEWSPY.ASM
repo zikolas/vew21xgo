@@ -39,7 +39,7 @@
 ;---
 ;--- Build:  ./spybuild.sh   (host-side JWasm + wlink, as for FMVOL)
 ;---
-;--- (C) 2026 zikolas, MIT.  JLM entry points and the I/O-trap interface
+;--- (C) 2026 zikolas, GPL v2.  JLM entry points and the I/O-trap interface
 ;--- follow Jemm's documented JLM.INC.
 
     .386

@@ -18,7 +18,7 @@ the codec's clock, SCSI, unknown), so its COR index is written twice.
 The 211's FM is summed after the codec and has no volume control in
 hardware (see FMVOL). A card whose CIS EEPROM has failed reads as a
 uniform fill; it is reported, and configured from built-in knowledge only
-under `/FORCE /S=n`, never written (see VEWCIS).
+under `/FORCE /S=n`, never written (repair is `vewcis/`).
 
 Backends, in auto-detect order:
 
@@ -66,62 +66,38 @@ VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T] [/SPKR] [/NOFM]
 DOS runs `.COM` before `.EXE`, so this takes over from the old 1.x `.EXE`
 if both sit in one directory.
 
-## VEWCIS — repairing a dead CIS
+## The rest of the kit
 
-`VEWCIS.EXE` writes a known-good CIS back into a CF-VEW211 whose EEPROM
-load has failed, and nothing else. The model must be given, because a
-dead card cannot say what it is:
+Each lives in its own directory with its own README and build script:
 
-```
-VEWCIS /211            volatile heal: into the RAM shadow, until power-down
-VEWCIS /211 /BURN      permanent: commit the image to the EEPROM, verify
-VEWCIS /211 /RESTORE   burn the reference image even over a valid CIS
-```
-
-> **`/BURN` and `/RESTORE` are permanent and only reversible with a
-> byte-exact image of that card.** The commit strobe belongs to the MEI
-> ASIC, so a dead J04, 212 or JSC101 would accept a 211 image and be
-> stamped with the wrong identity. Never conclude a CIS is dead from one
-> quick read (attribute memory lags socket power by up to ~110 ms on some
-> hosts; VEWCIS and the enabler gate on the data since 2.4). VEWCIS
-> refuses all writes on a 212.
-
-## FMVOL — FM volume for the 211
-
-The 211's FM has no volume control in hardware. `FMVOL.DLL`, a Jemm
-loadable module, traps the OPL ports and rescales carrier Total Level
-writes in flight, 0–63 steps of 0.75 dB (`FMGO`, or `JLOAD FMVOL.DLL 24`;
-`JLOAD -u` unloads). Real-mode and V86 games only: DOS-extender games
-bypass it. Details in [`doc/FMVOL.md`](doc/FMVOL.md). On the 212 and
-JSC101 the FM passes through the codec's line input instead, so its
-gain register (I18/I19) is the volume control there.
-
-## The wavetable synth (synth/)
-
-`OPL4SYN` stays resident and turns the 212's OPL4/YRW801 into a General
-MIDI synth for games: with [MPUSHIM](https://github.com/zikolas/mpushim)
-trapping an MPU-401 at 330 it plays alongside SB digital audio from one
-boot. `OPL4MID` plays a .MID file on it from the command line. See
-[synth/README.md](synth/README.md).
+- [`vewcis/`](vewcis/) — **VEWCIS** repairs a CF-VEW211 whose CIS EEPROM
+  has failed, permanently and in software. Its `/BURN` is irreversible
+  without a byte-exact image of the card; read its warning first.
+- [`fmvol/`](fmvol/) — **FMVOL** gives the 211's FM synth the volume
+  control it lacks in hardware: a Jemm module that rescales carrier
+  levels in flight, real-mode and V86 games only. Not needed on the 212
+  and JSC101, where the FM passes through the codec's line input and its
+  gain register (I18/I19) is the control.
+- [`synth/`](synth/) — **OPL4SYN** stays resident and turns the 212's
+  OPL4/YRW801 into a General MIDI synth for games: with
+  [MPUSHIM](https://github.com/zikolas/mpushim) trapping an MPU-401 at
+  330 it plays alongside SB digital audio from one boot. **OPL4MID**
+  plays a .MID file on it from the command line.
+- [`probes/`](probes/) — the diagnostic programs that established
+  everything above, and the byte-exact CIS images of all four cards.
+- [`legacy/`](legacy/) — the 1.x C enabler this project grew from.
 
 ## Build
 
 ```
 ./build.sh          VEW21XGO.COM (NASM, host or on-box)
-BUILD VEWCIS        VEWCIS.EXE (Open Watcom, 16-bit real mode)
-./fmbuild.sh        FMVOL.DLL (JWasm + wlink on the host; FMBLD.BAT on a DOS box)
 ```
-
-The synth builds with Open Watcom (`wcc -ms`, C89); the 1.x C enabler
-this project grew from is archived in `legacy/`.
 
 ## Documentation
 
 - [`doc/ASIC.md`](doc/ASIC.md) — the 211's MEI DA65646 ASIC: decode,
   CIS shadow, config and vendor registers, the EEPROM commit strobe.
-- [`doc/FMVOL.md`](doc/FMVOL.md) — the FM volume problem and the module.
-- [`probes/README.md`](probes/README.md) — every probe that established
-  the above, and the byte-exact CIS images of all four cards.
+- [`fmvol/README.md`](fmvol/README.md) — the FM volume problem and the module.
 - [`probes/CIS_VEW212.TXT`](probes/CIS_VEW212.TXT) — the 212 recon.
 
 Clean-room: the cards' own CIS dumps, the public Intel 82365SL register
@@ -132,6 +108,6 @@ hardware. No vendor driver code was read.
 
 ## License
 
-GPL v2 — see [LICENSE](LICENSE). The enabler alone was MIT through 2.5;
-the repo moved to GPL v2 when the synth, whose instrument tables derive
-from the GPL/BSD ALSA opl4 driver, moved in.
+Everything here is GPL v2 — see [LICENSE](LICENSE). The enabler alone
+was MIT through 2.5; the repo moved to GPL v2 when the synth, whose
+instrument tables derive from the GPL/BSD ALSA opl4 driver, moved in.

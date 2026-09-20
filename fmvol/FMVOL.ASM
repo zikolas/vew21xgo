@@ -40,7 +40,7 @@
 ;---
 ;--- Build (on the DOS box):  MIRBLD.BAT  ->  JWASMD + WLINK
 ;---
-;--- (C) 2026 zikolas, MIT. Written for this project; the JLM entry
+;--- (C) 2026 zikolas, GPL v2 (see LICENSE). Written for this project; the JLM entry
 ;--- points and I/O-trap interface follow Jemm's documented JLM.INC, and
 ;--- the OPL2/OPL3 register model is the public Yamaha programming model.
 ;--- Patterned on our own CDXMIR module.

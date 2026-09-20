@@ -8,7 +8,7 @@ Services and OmniBook Socket Services backends and both card models.
 
 Notable difference from the current tool: 1.x (versions 1.3–1.4) healed a
 dead CIS automatically on every run. That behaviour moved out to the
-standalone `../VEWCIS.C` when the 2.x enabler took over — an enabler
+standalone `../vewcis/VEWCIS.C` when the 2.x enabler took over — an enabler
 silently writing a possibly-wrong identity into a card it cannot actually
 identify stopped being wise once a second card model existed.
 
