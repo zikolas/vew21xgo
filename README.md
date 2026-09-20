@@ -1,9 +1,13 @@
-# VEW21XGO — a DOS enabler for the CF-VEW211 / PC-9801N-J04 PCMCIA sound cards
+# VEW21XGO — a DOS enabler for the CF-VEW211 / VEW212 / JSC101 / PC-9801N-J04 PCMCIA sound cards
 
 A single-command DOS **enabler** for the Matsushita/Panasonic **CF-VEW211**
-PCMCIA sound card (1994 — CS4231A WSS codec + YMF262 OPL3) and, since 2.4,
-its NEC-badged PC-98 sibling the **PC-9801N-J04** (same MEI ASIC and codec,
-**no FM synth**). One ~13 KB `.COM`, three host backends, auto-detected.
+PCMCIA sound card (1994 — CS4231A WSS codec + YMF262 OPL3) and its
+relatives: the NEC-badged PC-98 sibling **PC-9801N-J04** (same MEI ASIC and
+codec, **no FM synth**, since 2.4), the **CF-VEW212** "Sound Card PRO"
+(OPL4, since 2.5) and, since 2.8, the **CF-JSC101 "Sound SCSI Card"**
+(the same codec and an OPL3 next to a SCSI controller — the sound half is
+enabled, the SCSI half left alone). One ~14 KB `.COM`, three host
+backends, auto-detected.
 
 The third family member, the **CF-VEW212 "Sound Card PRO"** (related ASIC, OPL4
 wavetable), is **recognized but deliberately not configured** as of 2.3:
@@ -246,10 +250,11 @@ ear, and the route to catching protected-mode games too — is in
 | | | `0x22` | `0xF40` | `0x388` |
 | | | `0x23` | `0x604` | `0x388` |
 | CF-VEW212 | `0032/0501` | `0x20` (declared) | `0x530` | `0x388` |
+| CF-JSC101 | `0032/0701` | `0x20`, written twice (see below) | `0x530` | `0x388` |
 | PC-9801N-J04 | *none* — VERS_1 `"NEC"`, `"PC-9801N-J04"` | `0x22` (sole entry) | `0xF40` | *no FM silicon* |
 
 Config registers (COR + CCSR) live at attribute offset `0x200` on all of
-them.
+them except the JSC101, whose CIS puts them at `0x420`.
 The COR reads back with the LevlREQ bit pinned high — these cards only do
 level-mode interrupts, hence the `{7, 9, 10, 11}` IRQ set from the CIS.
 
@@ -288,6 +293,36 @@ file is COR+CCSR only; the 211's vendor registers at `0x204`–`0x208`
 don't exist). Bringing the 212 up properly on those real configurations
 is the current work — until then the enabler declines it rather than
 configure a layout the card does not serve.
+
+**The JSC101 is the family's sound-plus-SCSI card, and its ASIC has four
+configuration blocks.** MANFID `0032/0701`, VERS_1 `"Panasonic"`, `"Sound
+SCSI Card"`, `"CF-JSC101"`. Same CS4231A at `530` (WSS block, codec
+registers at `534`), an OPL3 at `388` whose analog output enters the
+codec's **line input** (the 212's topology, so it gets the same un-mute),
+and a 16-port SCSI block. Two things make it different. Its CIS hides the
+CONFIG and CFTABLE tuples behind a `LONGLINK_A` (the enabler follows one
+link since 2.8; the config base is `0x420`). And the ASIC carries **four
+independent sets of configuration registers, 0x20 apart** — `0x420`
+codec, `0x440` OPL3 *and the codec's clock*, `0x460` SCSI (index `0x31`
+plus IOBASE), `0x480` unknown. They read identically cold, which makes
+them look like aliases, but with only block 0 written the codec maps and
+then sits in INIT forever with `388` dead — the failure a one-COR enabler
+sees. So the enabler writes index `0x20` into **both** `0x420` and `0x440`
+(`COR2` in the summary); the SCSI block stays unconfigured. Under Card
+Services the second block is written with `AccessConfigurationRegister`
+at offset `0x20`, which is how the vendor's own CS client does it (it
+knows nothing of the block either). Vpp is not needed although the vendor
+requests it. Recipe source: the vendor's DOS enabler run under IBM Card
+Services and read back off the hardware, plus its INF/PRM/README data
+files — no driver code was examined. Verified on the PC110 with `/PCIC`
+and `/CS`: FM tone and PIO PCM by ear through both the phones jack and
+the `#SPKR` route, then **DOOM with digital SFX and FM music** through
+VSBPCMCIA's VEW211 backend (`VSBPCM /CARD:VEW211 /BASE530` after
+`VEW21XGO /PCIC /IO=530 /VOL=16 /W=DC00`, the GOVEW212 recipe with the
+window moved to the JemmEx exclusion). `/OB` is untested. The byte-exact
+CIS capture and the probes live in the `jsc101-recon` folder for now.
+Beware: COR index `0x30` in block 0 stalls the card's bus until a power
+cycle.
 
 ## History: the 1.x C enabler
 

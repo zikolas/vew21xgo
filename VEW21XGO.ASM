@@ -1,8 +1,10 @@
 ;==========================================================================
-;  VEW21XGO 2.7 - unified clean-room DOS enabler for the Panasonic
+;  VEW21XGO 2.8 - unified clean-room DOS enabler for the Panasonic
 ;               CF-VEW211 and CF-VEW212 PCMCIA sound cards (Matsushita:
 ;               CS4231A WSS codec + YMF262 OPL3; the 212 "Sound Card PRO"
-;               adds an OPL4 wavetable), three host backends in one .COM:
+;               adds an OPL4 wavetable) and the CF-JSC101 "Sound SCSI
+;               Card" (same codec + OPL3, plus a SCSI half this enabler
+;               leaves alone), three host backends in one .COM:
 ;
 ;    /PCIC  Intel 82365-class point enabler (direct PCIC programming).
 ;           Lineage: our VEW21XGO 1.x (C, IBM PC110), ported to asm.
@@ -51,6 +53,21 @@
 ;  Recipe source: the vendor's own Windows 3.1 DOS enabler SCPROENB.COM,
 ;  run and then read back off the hardware - no driver was examined.
 ;
+;  THE CF-JSC101 "Sound SCSI Card" (MANFID 0032/0701, since 2.8): CS4231A
+;  at 530h (the CIS's only fixed base) + an OPL3 at 388h whose analog
+;  output enters the codec's LINE input (the 212 topology, same un-mute)
+;  + a 16-port SCSI block.  Its CIS puts the config registers at 420h
+;  and hides CONFIG/CFTABLE behind a LONGLINK_A (followed since 2.8).
+;  The ASIC has FOUR config register sets, 20h apart: 420h codec, 440h
+;  OPL3 (and the codec's clock - block 0 alone leaves the codec stuck in
+;  INIT and 388h dead), 460h SCSI (idx 31h + IOBASE), 480h unknown.  So
+;  the card needs COR index 20h written TWICE: at 420h and at 440h.  The
+;  SCSI block stays unconfigured here.  Index 30h in block 0 stalls the
+;  bus (power cycle) - never sweep it.  Vpp is not needed although the
+;  vendor requests it.  Recipe source: the vendor's SNSCDOSV.SYS run
+;  under IBM Card Services and read back off the hardware, plus its
+;  INF/PRM/README data files - no driver was examined.
+;
 ;  DEAD-CIS CARDS: the ASIC shadows the CIS in RAM loaded from a 93LC56
 ;  EEPROM; when that load fails the whole tuple region reads one stuck
 ;  fill byte.  A blank/dead CIS is NOT proof the card is a VEW21x - any
@@ -69,7 +86,8 @@
 ;
 ;    /IO=hex   codec base: 530 (default) / E80 / F40 / 604 (picks the
 ;              matching COR index; codec regs at base+4, OPL3 always 388;
-;              the alternates are 211-only - a 212 is forced to 530)
+;              the alternates are 211-only - a 212 or JSC101 is forced
+;              to 530)
 ;    /I=dec    IRQ to route: 7, 9, 10 or 11 only (level-mode card;
 ;              default 0 = none - FM needs no IRQ)
 ;    /VOL=dec  DAC (PCM) attenuation, 1.5 dB per step, 0 (full, clips the
@@ -109,7 +127,7 @@ MODE_PCIC equ 3
 ; blocks BY OFFSET between two runs of the same binary, so bump this on
 ; EVERY release - offsets shift with any rebuild, and a mismatched resident
 ; copy must be refused (reboot to replace), never driven.
-VGVER   equ 0206h
+VGVER   equ 0208h
 
 TDMAX   equ 40h                       ; CS tuple-data buffer size
 VBMAX   equ 80h                       ; VERS_1 capture buffer size.  The
@@ -189,12 +207,20 @@ cfgbase  dw VEW_COR                   ; COR base from CISTPL_CONFIG
 mapflags db 0                         ; M_FM mapped this run
 r_ir1    dw 0                         ; CS IRQ ladder step-1 refusal status
 r_ir2    dw 0                         ; CS IRQ ladder step-2 refusal status
+cor2off  dw 0                         ; second COR at cfgbase+this (JSC101:
+                                      ; 20h = block 1); 0 = none
+r_cor2rb db 0                         ; second COR read back (all modes)
+r_cor2st dw 0                         ; CS: AccessConfigReg status if refused
 verslen  dw 0                         ; VERS_1 strings length in versbuf
 versbuf  times VBMAX db 0             ; VERS_1 strings (0-separated)
 R_LEN    equ $-arg_sock
 
 cbase    dw 0534h                     ; codec register base = [o_io]+4
-is212    db 0                         ; CF-VEW212: needs the line-in un-mute
+is212    db 0                         ; CF-VEW212: OPL4 wave pair, /MIDI
+lin_in   db 0                         ; FM enters the codec LINE IN: un-mute
+                                      ; it (212, JSC101)
+iolines  db 10                        ; I/O address lines the card decodes
+                                      ; (CS RequestIO; the JSC101 says 12)
 o_midi   db 0                         ; /MIDI: hand the 212 to the MPU stack
 mf_save  db 0                         ; winEn saved across the /MIDI flip
 r_midi   db 0                         ; the flip actually happened
@@ -219,6 +245,7 @@ CS_RELCFG       equ 1Eh
 CS_REQIO        equ 1Fh
 CS_REQIRQ       equ 20h
 CS_REQCFG       equ 30h
+CS_ACCESSCFG    equ 36h
 
 EV_REMOVAL      equ 05h
 EV_CLIENTINFO   equ 14h
@@ -288,6 +315,12 @@ p_rirq:  dw 0                         ; ReleaseIRQ: socket
 p_rirq_i db 0                         ;   IRQ to release
 P_RIRQ_LEN equ 5
 
+p_acr:   dw 0                         ; AccessConfigurationRegister: socket
+p_acr_ac db 0                         ;   action: 0 = read, 1 = write
+p_acr_of db 0                         ;   offset from the config base
+p_acr_v  db 0                         ;   value
+P_ACR_LEN equ 5
+
 ;==========================================================================
 ;  KNOWN-CARD MANIFEST (resident: the CS hot-plug path identifies too).
 ;  A dead-CIS unit (uniform-fill signature) is NOT auto-claimed - a
@@ -310,6 +343,7 @@ P_RIRQ_LEN equ 5
 K_FIX530 equ 01h
 K_UNSUP  equ 02h
 K_212    equ 10h
+K_JSC    equ 20h                      ; CF-JSC101: line-in FM, second COR
 KREC     equ 7
 ktab:
         dw VEW_MANF, 0001h
@@ -318,6 +352,9 @@ ktab:
         dw VEW_MANF, 0501h
         db K_212
         dw n_v212
+        dw VEW_MANF, 0701h
+        db K_JSC | K_FIX530
+        dw n_jsc
         dw 0, 0                       ; end of table
 
 ;--- second-stage manifest: family members whose CIS has NO MANFID tuple
@@ -339,6 +376,9 @@ identify:
         push si
         push ax
         mov  byte [is212], 0          ; re-derived every run (CS hot-plug)
+        mov  byte [lin_in], 0
+        mov  word [cor2off], 0
+        mov  byte [iolines], 10
         mov  word [fm_end], FM_BASE+3
         mov  byte [io_ctl], 0
         mov  si, ktab
@@ -368,16 +408,22 @@ identify:
         ret
 .frc:   mov  byte [f212], 1           ; note the forced 212 for the summary
 .sup:   test byte [k_flags], K_212    ; the 212's REAL, undeclared config
-        jz   .k530
+        jz   .kjsc
         mov  byte [coridx], 23h       ; index 23h - the CIS never declares it
         mov  word [fm_end], FM_BASE+5 ; OPL4: 388h-38Dh, incl. wave pair
         mov  byte [io_ctl], 22h       ; both windows autosized, as the vendor
         mov  byte [is212], 1          ; and its OPL4 feeds the codec LINE IN
+        mov  byte [lin_in], 1
         cmp  word [o_io], 0530h
         je   .ok
         mov  word [o_io], 0530h       ; only 530h exists on this card
         mov  byte [r_iofix], 1
         jmp  .ok
+.kjsc:  test byte [k_flags], K_JSC    ; CF-JSC101: two config blocks
+        jz   .k530
+        mov  byte [lin_in], 1         ; its OPL3 feeds the codec LINE IN
+        mov  word [cor2off], 20h      ; block 1 at cfgbase+20h: OPL3 + clock
+        mov  byte [iolines], 12       ; per its CIS
 .k530:  test byte [k_flags], K_FIX530 ; fixed-base card: only 530h exists
         jz   .ok
         cmp  word [o_io], 0530h
@@ -692,6 +738,8 @@ cs_configure:
         mov  [p_io+2], ax
         mov  byte [p_io+4], 10        ; the card decodes base..base+9
         mov  byte [p_io+5], 0
+        mov  al, [iolines]
+        mov  [p_io+0Ah], al
         cmp  byte [en_fm], 0
         je   .r2none
         mov  word [p_io_b2], FM_BASE
@@ -773,6 +821,7 @@ cs_configure:
         call rel_io_irq               ; undo the partial claim
         jmp  .out
 .cfgok:
+        call cs_cor2                  ; JSC101: the second config block
 
         ; ---- codec + FM bring-up (shared chip path) ----------------------
         xor  al, al
@@ -802,6 +851,76 @@ cs_configure:
         mov  [r_code], ax
         mov  byte [r_stage], 7
         jmp  .out
+
+; ---- cs_cor2: write COR index [coridx] into the second config block at
+;      cfgbase+[cor2off] through AccessConfigurationRegister (the offset
+;      is a plain attribute-space offset from the config base, so 20h
+;      lands on block 1).  CS knows nothing of that block, and need not:
+;      the vendor's own CS client writes it behind CS's back the same
+;      way.  Refusal is recorded, not fatal: chip_init then finds the
+;      codec stuck in INIT and the summary says why. -----------------------
+cs_cor2:
+        push ax
+        push bx
+        push cx
+        push dx
+        push si
+        mov  byte [r_cor2rb], 0
+        mov  word [r_cor2st], 0
+        cmp  word [cor2off], 0
+        je   .done
+        mov  ax, [arg_sock]
+        mov  [p_acr], ax
+        mov  byte [p_acr_ac], 1       ; write
+        mov  al, [cor2off]
+        mov  [p_acr_of], al
+        mov  al, [coridx]             ; plain index; the card pins LevlREQ
+        mov  [p_acr_v], al
+        call acr_call
+        jnc  .rb
+        mov  [r_cor2st], ax
+        jmp  .done
+.rb:    mov  ax, 5
+        call ms_delay
+        mov  byte [p_acr_ac], 0       ; read it back for the summary
+        mov  byte [p_acr_v], 0
+        call acr_call
+        jc   .done
+        mov  al, [p_acr_v]
+        mov  [r_cor2rb], al
+.done:  pop  si
+        pop  dx
+        pop  cx
+        pop  bx
+        pop  ax
+        ret
+
+; acr_call: AccessConfigurationRegister with p_acr, walking the same
+; ArgLength candidates as RequestConfiguration (1Bh = wrong length).
+acr_call:
+        push si
+        mov  si, acrlens
+.t:     lodsb
+        test al, al
+        jz   .exhaust
+        mov  cl, al
+        xor  ch, ch
+        mov  al, CS_ACCESSCFG
+        mov  bx, p_acr
+        mov  dx, [handle]
+        call cs_call
+        jnc  .out
+        cmp  ax, 1Bh
+        je   .t
+        stc
+        jmp  .out
+.exhaust:
+        mov  ax, 1Bh
+        stc
+.out:   pop  si
+        ret
+
+acrlens: db 5, 6, 8, 0
 
 ; ---- tup_get: GetFirstTuple (code in p_tup+4) then GetTupleData ---------
 ;      out: CF set if either failed (AX = status); data in tdata
@@ -1025,7 +1144,7 @@ cc_unmute:
         mov  al, 05h
         mov  ah, 88h
         call ccput
-        cmp  byte [is212], 0          ; ---- CF-VEW212 only: open LINE IN ----
+        cmp  byte [lin_in], 0         ; ---- 212 / JSC101: open LINE IN ----
         je   .done
         mov  al, 0Ch                  ; I12 |= MODE2: makes I18/I19 reachable
         call ccget
@@ -1970,6 +2089,7 @@ ob_got:
         je   .ccw
         mov  al, 08h
 .ccw:   mov  [es:bx+2], al
+        call cor2_write               ; JSC101: block 1, same window
         call ob_restw0
 
         ; ---- socket to I/O interface + IRQ steering ----------------------
@@ -2618,6 +2738,7 @@ pc_found:
         je   .ccw
         mov  al, 08h
 .ccw:   mov  [es:bx+2], al
+        call cor2_write               ; JSC101: block 1, same window
 
         ; ---- I/O windows: win0 = codec base..base+9, win1 = OPL3 ---------
         mov  ax, [o_io]
@@ -2731,6 +2852,29 @@ pc_found:
         mov  [rep_irq], al
         call report
         int  20h
+
+; ---- cor2_write: PCIC/OB - the attribute window is mapped at ES:, the
+;      config base is in BX.  JSC101 only ([cor2off] = 20h): write the
+;      same COR index into block 1 (OPL3 + codec clock) and read it back
+;      for the summary.  Preserves everything. ----------------------------
+cor2_write:
+        push ax
+        push bx
+        push cx
+        mov  byte [r_cor2rb], 0
+        mov  cx, [cor2off]
+        jcxz .done
+        add  bx, cx
+        mov  al, [coridx]             ; plain index; the card pins LevlREQ
+        mov  [es:bx], al
+        mov  ax, 5
+        call ms_delay
+        mov  al, [es:bx]
+        mov  [r_cor2rb], al
+.done:  pop  cx
+        pop  bx
+        pop  ax
+        ret
 
 pc_nochip:
         mov  si, m_nochip1
@@ -3256,6 +3400,7 @@ cis_parse:
         mov  word [manfid+2], 0
         mov  word [cfgbase], VEW_COR
         mov  byte [matched], 0
+        mov  word [linkto], 0
 .loop:
         mov  al, [cisbuf+bx]
         cmp  al, 0FFh
@@ -3272,6 +3417,13 @@ cis_parse:
         jne  .n15
         call .vers
 .n15:
+        cmp  al, 11h                  ; CISTPL_LONGLINK_A: the chain goes on
+        jne  .n11                     ; at an attribute address (JSC101: 94h,
+        mov  dl, [cisbuf+bx+2]        ; where its CONFIG + CFTABLE live);
+        mov  dh, [cisbuf+bx+3]        ; dense index = address / 2
+        shr  dx, 1
+        mov  [linkto], dx
+.n11:
         cmp  al, 20h                  ; CISTPL_MANFID
         jne  .n20
         mov  dl, [cisbuf+bx+2]
@@ -3304,6 +3456,13 @@ cis_parse:
         cmp  bx, CISLEN-2
         jb   .loop
 .end:
+        mov  bx, [linkto]             ; one LONGLINK_A, followed once, only
+        or   bx, bx                   ; inside the image we already hold
+        jz   .fin
+        mov  word [linkto], 0
+        cmp  bx, CISLEN-2
+        jb   .loop
+.fin:
         cmp  byte [gotcfg], 0
         je   .bad
         pop  di
@@ -3513,6 +3672,52 @@ report:
 .cornl:
         call crlf
 .cordone:
+; second config block (JSC101): verbose, or whenever it did not land
+        cmp  word [cor2off], 0
+        je   .cor2done
+        mov  al, [r_cor2rb]
+        and  al, 3Fh
+        cmp  al, [coridx]
+        jne  .cor2show                ; mismatch/refusal is always said
+        cmp  byte [o_verb], 0
+        je   .cor2done
+.cor2show:
+        mov  si, m_cor2at
+        call prstr
+        mov  ax, [cfgbase]
+        add  ax, [cor2off]
+        call prhexadr
+        mov  si, m_index
+        call prstr
+        mov  al, [coridx]
+        call prhex2
+        cmp  word [r_cor2st], 0
+        je   .cor2rb
+        mov  si, m_cor2cs             ; CS refused the write: say the status
+        call prstr
+        mov  ax, [r_cor2st]
+        call prhex4
+        mov  al, ')'
+        call prchar
+        jmp  .cor2nl
+.cor2rb:
+        mov  al, [r_cor2rb]
+        and  al, 3Fh
+        cmp  al, [coridx]
+        jne  .cor2mis
+        mov  si, m_corok
+        call prstr
+        jmp  .cor2nl
+.cor2mis:
+        mov  si, m_cormis
+        call prstr
+        mov  al, [r_cor2rb]
+        call prhex2
+        mov  al, ')'
+        call prchar
+.cor2nl:
+        call crlf
+.cor2done:
 ; "   WSS 534   FM 388 OPL3   IRQ 7"   ("   MPU 330 ..." after /MIDI)
         cmp  byte [r_midi], 0         ; /MIDI: index 26h exposes the MPU and
         je   .wss                     ; NOT the codec - 530h+0..9 reads FF,
@@ -3639,7 +3844,10 @@ report:
         add  al, '0'
         call prchar
         mov  si, m_mix2
-        call prstr
+        cmp  byte [lin_in], 0         ; 212/JSC101: the FM comes in through
+        je   .mixs                    ; the line input we opened
+        mov  si, m_mix3
+.mixs:  call prstr
 .mixdone:
 ; optional notes
         cmp  byte [f212], 0
@@ -3656,6 +3864,11 @@ report:
         mov  si, m_spkr
         call prstr
 .nspk:
+        cmp  word [cor2off], 0        ; JSC101: say what was left alone
+        je   .nscsi
+        mov  si, m_jscscsi
+        call prstr
+.nscsi:
         ret
 
 ;==========================================================================
@@ -4066,16 +4279,16 @@ showhelp:                             ; /? or /H : print usage and exit
 ;==========================================================================
 ;  MESSAGES
 ;==========================================================================
-m_banner:  db 'VEW21XGO 2.7 - CF-VEW211/212/J04 enabler (PCIC/CS/OB)',13,10,0
+m_banner:  db 'VEW21XGO 2.8 - CF-VEW211/212/JSC101/J04 enabler (PCIC/CS/OB)',13,10,0
 m_midipc:  db '   /MIDI needs the PCIC backend in this build - card left on the',13,10
            db '   codec config (index 23h).  Re-run with /PCIC for the MPU.',13,10,0
 m_help:
- db 'Enables the Panasonic CF-VEW211 PC Card sound card with no Card',13,10
- db 'Services needed, and the NEC PC-9801N-J04 (same codec, no FM;',13,10
- db 'single config: F40h, COR index 22h - /IO is overridden).',13,10
- db 'Services needed (CS4231A WSS codec + OPL3 FM).  The CF-VEW212 is',13,10
- db 'recognized but NOT configured (since 2.3): its working configurations',13,10
- db 'are undeclared in its CIS - support in progress.',13,10,13,10
+ db 'Enables the Panasonic CF-VEW211 PC Card sound card (CS4231A WSS',13,10
+ db 'codec + OPL3 FM) with no Card Services needed, plus its relatives:',13,10
+ db 'the CF-VEW212 (OPL4; on its undeclared index 23h), the CF-JSC101',13,10
+ db 'Sound SCSI Card (codec + OPL3, two config blocks; the SCSI half is',13,10
+ db 'left unconfigured) and the NEC PC-9801N-J04 (codec only; single',13,10
+ db 'config F40h, COR index 22h - /IO is overridden).',13,10,13,10
  db 'Usage: VEW21XGO [/PCIC|/CS|/OB] [/IO=530] [/I=0] [/VOL=24] [/T] [/SPKR]',13,10
  db '                [/NOFM] [/S=n] [/W=D000] [/FORCE] [/OFF]',13,10,13,10
  db '  (no mode)  auto-detect host: Card Services, then OmniBook SS, then PCIC',13,10
@@ -4123,6 +4336,9 @@ m_cidtag:  db ' (ID ',0
 m_manf1:   db '  (MANFID ',0
 m_manf2:   db 'MANFID ',0
 m_corat:   db '   COR @ ',0
+m_cor2at:  db '   COR2 @ ',0
+m_cor2cs:  db ' (NOT WRITTEN: Card Services refused, status ',0
+m_jscscsi: db '   SCSI function left unconfigured (sound only).',13,10,0
 m_index:   db ' index ',0
 m_corok:   db ' (verified)',0
 m_cormis:  db ' (MISMATCH: readback ',0
@@ -4144,6 +4360,7 @@ m_win:     db 'win',0
 m_comma:   db ', ',0
 m_mix:     db '   mixer: DAC -',0
 m_mix2:    db 'dB, Aux1/Aux2 muted (FM sums after the codec)',13,10,0
+m_mix3:    db 'dB, Aux1/Aux2 muted, line-in open (FM comes through the codec)',13,10,0
 m_iofix:   db '   Note: this card has one fixed codec base - /IO'
            db ' overridden.',13,10,0
 m_spkr:    db '   #SPKR audio ON - card mixer routed to host speaker',13,10,0
@@ -4167,9 +4384,9 @@ m_212decl: db 'A CF-VEW212 (Sound Card PRO) was recognized but NOT configured: i
 m_s_212:   db '   CF-VEW212 recognized - NOT configured (no working config known yet)',0
 m_212fw:   db '   WARNING: /FORCE set the CIS-declared config on a CF-VEW212 - that',13,10
            db '   config is dead on real hardware; expect no audio.',13,10,0
-m_noknown: db 'No CF-VEW211/212 (or dead-CIS card) in any socket.',13,10,0
-m_noknown2: db 'No CF-VEW211/212 (or dead-CIS card) found in any socket.',13,10,0
-m_nomatch: db 'Not a CF-VEW211/212 (last seen ',0
+m_noknown: db 'No CF-VEW211/212/JSC101 (or dead-CIS card) in any socket.',13,10,0
+m_noknown2: db 'No CF-VEW211/212/JSC101 (or dead-CIS card) found in any socket.',13,10,0
+m_nomatch: db 'Not a CF-VEW211/212/JSC101 (last seen ',0
 m_badcis:  db 'CIS invalid / config register base out of range',13,10,0
 ; ---- OB mode ----
 m_noss:    db 'No PCMCIA Socket Services (INT 1A) on this machine.',13,10,0
@@ -4198,7 +4415,7 @@ m_regyes:  db 'yes',13,10,0
 m_regno:   db 'NO (continuing anyway)',13,10,0
 m_probe:   db 'Probing socket ',0
 m_s_tup:   db '  no card / CIS unreadable, status ',0
-m_s_wrong: db '  not a CF-VEW211/212: MANFID ',0
+m_s_wrong: db '  not a CF-VEW211/212/JSC101: MANFID ',0
 m_s_io:    db '  RequestIO refused, status ',0
 m_s_cfg:   db '  RequestConfiguration refused, status ',0
 m_nocard:  db 'Card not enabled.',13,10,0
@@ -4218,6 +4435,7 @@ m_csnoforce: db 'Note: /FORCE is not supported in CS mode - ignored.',13,10,0
 n_vew:     db 'Panasonic CF-VEW211',0
 n_v212:    db 'Panasonic CF-VEW212 (Sound Card PRO)',0
 n_j04:     db 'NEC PC-9801N-J04 (codec, no FM)',0
+n_jsc:     db 'Panasonic CF-JSC101 (Sound SCSI Card)',0
 n_dead:    db 'CF-VEW21x (dead CIS)',0
 n_unk:     db 'Unknown card',0
 
@@ -4237,6 +4455,7 @@ pwrsettle: db 1                       ; 1 = we powered the card, so the
                                       ; output stage still needs settling
 failwhy:   db 0
 gotcfg:    db 0
+linkto:    dw 0                       ; cis_parse: pending LONGLINK_A target
 cisfill:   db 0                       ; dead-CIS stuck fill value
 rep_sock:  db 0                       ; summary inputs
 rep_irq:   db 0FFh
